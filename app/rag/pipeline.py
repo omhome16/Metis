@@ -53,8 +53,17 @@ async def retrieve_context(
     gateway: LLMGateway,
     question: str,
     corpus: str | None,
+    config: dict | None = None,
 ) -> tuple[list[ChunkHit], str]:
-    """Query rewrite → hybrid (vector+keyword, RRF) → graph boost → rerank."""
+    """Query rewrite → hybrid (vector+keyword, RRF) → graph boost → rerank.
+
+    `config` (used by the eval harness) can override rerank_enabled / graph_boost / top_k_rerank.
+    """
+    cfg = config or {}
+    rerank_enabled = cfg.get("rerank_enabled", settings.rerank_enabled)
+    graph_boost = cfg.get("graph_boost", True)
+    top_k = int(cfg.get("top_k_rerank", settings.top_k_rerank))
+
     rewritten = question
     if settings.query_rewrite:
         try:
@@ -70,20 +79,21 @@ async def retrieve_context(
     keyword_hits = await keyword_search(session, rewritten, corpus=corpus, top_k=settings.rerank_candidates)
     hits = fuse_hybrid(vector_hits, keyword_hits, top_k=settings.rerank_candidates)
 
-    try:
-        store = get_graph_store()
-        if await store.ping():
-            extracted = await extract_entities(gateway, rewritten, max_chars=4000)
-            names = [e["name"] for e in extracted.get("entities", [])][:8]
-            if names:
-                chunk_ids = await store.neighbor_chunk_ids(names, max_hops=2, limit=10)
-                graph_hits = await fetch_chunks_by_id(session, chunk_ids)
-                hits = merge_hits(hits, graph_hits, top_k=settings.rerank_candidates)
-    except Exception as exc:  # noqa: BLE001 — graph boost must never break ask
-        logger.warning("graph boost skipped: %s", exc)
+    if graph_boost:
+        try:
+            store = get_graph_store()
+            if await store.ping():
+                extracted = await extract_entities(gateway, rewritten, max_chars=4000)
+                names = [e["name"] for e in extracted.get("entities", [])][:8]
+                if names:
+                    chunk_ids = await store.neighbor_chunk_ids(names, max_hops=2, limit=10)
+                    graph_hits = await fetch_chunks_by_id(session, chunk_ids)
+                    hits = merge_hits(hits, graph_hits, top_k=settings.rerank_candidates)
+        except Exception as exc:  # noqa: BLE001 — graph boost must never break ask
+            logger.warning("graph boost skipped: %s", exc)
 
-    if settings.rerank_enabled:
-        hits = await get_reranker().rerank(rewritten, hits, top_k=settings.top_k_rerank)
+    if rerank_enabled:
+        hits = await get_reranker().rerank(rewritten, hits, top_k=top_k)
 
     return hits, rewritten
 

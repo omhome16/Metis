@@ -5,9 +5,12 @@ structured returns shape-appropriate JSON so downstream parsing code stays testa
 """
 
 import json
+import re
 from collections.abc import AsyncIterator
 
 from app.gateway.base import ChatResult, LLMClient
+
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
 
 class MockProvider(LLMClient):
@@ -54,6 +57,18 @@ class MockProvider(LLMClient):
             return {"query": self._last_user(messages)[:80]}
         if "contradict" in prompt:
             return {"contradicts": False, "reason": ""}
+        # Judge-style calls used by the eval harness (optimistic lexical defaults).
+        if "claims" in prompt:
+            sentences = [s.strip() for s in _SENTENCE_SPLIT.split(self._last_user(messages)) if len(s.strip()) > 3]
+            return {"claims": sentences[:10]}
+        if "supported" in prompt:
+            return {"supported": True}
+        if "useful" in prompt:
+            return {"useful": True}
+        if "present" in prompt:
+            return {"present": True}
+        if "question" in prompt:
+            return {"questions": ["What is the answer about?", "What does this cover?", "Where is this found?"]}
         return {}
 
     async def describe_image(self, image_b64: str, prompt: str, mime_type: str = "image/png") -> str:

@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import ask, corpora, graph, health, ingest, search
+from app.api.routes import ask, corpora, evals, graph, health, ingest, search
 from app.core.config import settings
 from app.core.logging import get_logger, setup_logging
 from app.db.session import engine
@@ -38,3 +38,4 @@ app.include_router(corpora.router, prefix=settings.api_prefix)
 app.include_router(ask.router, prefix=settings.api_prefix)
 app.include_router(search.router, prefix=settings.api_prefix)
 app.include_router(graph.router, prefix=settings.api_prefix)
+app.include_router(evals.router, prefix=settings.api_prefix)

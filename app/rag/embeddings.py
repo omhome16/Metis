@@ -28,7 +28,9 @@ class Embedder:
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         model = await asyncio.to_thread(self._load)
-        vectors = await asyncio.to_thread(model.encode, texts, normalize_embeddings=True, batch_size=16)
+        vectors = await asyncio.to_thread(
+            model.encode, texts, normalize_embeddings=True, batch_size=16, show_progress_bar=False
+        )
         return [v.tolist() for v in vectors]
 
     async def embed_query(self, text: str) -> list[float]:
