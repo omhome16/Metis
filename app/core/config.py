@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -60,6 +60,12 @@ class Settings(BaseSettings):
 
     # ── CORS ───────────────────────────────────────────────────────────────
     cors_origins: list[str] = ["*"]
+
+    @field_validator("groq_api_key", "gemini_api_key", mode="before")
+    @classmethod
+    def _trim_api_keys(cls, v):
+        """Treat whitespace-only values (e.g. `KEY=   # comment`) as unset."""
+        return v.strip() if isinstance(v, str) else v
 
     @property
     def is_test(self) -> bool:

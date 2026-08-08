@@ -58,3 +58,18 @@ def require_db():
     if not _db_reachable():
         pytest.skip("Postgres not reachable — start with: docker compose up -d db")
     return True
+
+
+@pytest.fixture
+async def require_graph():
+    """Skip a test when Neo4j is not reachable; wipe the graph around the test."""
+    from app.graph.store import get_graph_store
+
+    store = get_graph_store()
+    if not await store.ping():
+        pytest.skip("Neo4j not reachable — start with: docker compose up -d graph")
+    async with store._driver.session() as session:  # wipe pre-test for isolation
+        await session.run("MATCH (n) DETACH DELETE n")
+    yield store
+    async with store._driver.session() as session:  # wipe post-test
+        await session.run("MATCH (n) DETACH DELETE n")

@@ -20,6 +20,7 @@ htmlcov/
 # Data (uploaded docs, images, local model caches)
 data/
 uploads/
+demo/
 .huggingface/
 torch_cache/
 

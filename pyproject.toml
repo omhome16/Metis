@@ -24,10 +24,9 @@ dependencies = [
     "arq>=0.26",
     # Graph
     "neo4j>=5.26",
-    # LLM gateway
+    # LLM gateway (both providers speak OpenAI-compatible APIs)
     "httpx>=0.27",
     "openai>=1.51",
-    "google-genai>=1.0",
     # ML / embeddings (local, free)
     "torch>=2.4",
     "torchvision>=0.19",

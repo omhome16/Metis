@@ -1,13 +1,20 @@
-"""Background ingestion worker (arq): normalize uploaded files to raw text."""
+"""Background ingestion worker (arq): normalize, chunk, embed, and index documents."""
 
 from pathlib import Path
 
 from pypdf import PdfReader
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.logging import get_logger
-from app.db.models import Document, IngestJob
+from app.db.models import Chunk, Document, IngestJob
 from app.db.session import async_session_factory
+from app.gateway.gateway import get_gateway
+from app.graph.extraction import extract_entities
+from app.graph.store import get_graph_store
+from app.rag.chunking import chunk_text
+from app.rag.embeddings import get_embedder
+from app.rag.retrieval import store_chunks
 
 logger = get_logger(__name__)
 
@@ -23,7 +30,14 @@ def extract_text(fmt: str, file_path: str) -> str:
 
 
 async def process_ingest_job(ctx: dict, job_id: str) -> None:
-    """Arq job: extract raw text for every pending document of this job and update progress."""
+    """Arq job: extract → chunk → embed → persist chunks → build graph; per-file isolation."""
+    embedder = get_embedder()
+    gateway = get_gateway()
+    graph = get_graph_store()
+    graph_ok = await graph.ping()
+    if not graph_ok:
+        logger.warning("Neo4j unreachable — graph build skipped for job %s", job_id)
+
     async with async_session_factory() as session:
         job = await session.get(IngestJob, job_id)
         if job is None:
@@ -44,11 +58,27 @@ async def process_ingest_job(ctx: dict, job_id: str) -> None:
         total = max(len(docs), 1)
         for i, doc in enumerate(docs):
             try:
-                doc.raw_text = extract_text(doc.format, doc.file_path or "")
+                text = extract_text(doc.format, doc.file_path or "")
+                doc.raw_text = text
+                await session.commit()
+                chunks = chunk_text(text, settings.chunk_size, settings.chunk_overlap)
+                if chunks:
+                    embeddings = await embedder.embed_texts(chunks)
+                    rows = await store_chunks(session, doc.id, chunks, embeddings)
+                    if graph_ok:
+                        extracted = await extract_entities(gateway, text)
+                        await graph.upsert_document_graph(
+                            doc_id=doc.id,
+                            title=doc.title,
+                            corpus=doc.corpus,
+                            chunks=[(r.id, r.text, r.chunk_index) for r in rows],
+                            entities=extracted.get("entities", []),
+                            relations=extracted.get("relations", []),
+                        )
                 job.progress = round(((i + 1) / total) * 100, 1)
             except Exception as exc:  # per-file error isolation
                 job.per_file_errors[str(doc.id)] = f"{type(exc).__name__}: {exc}"
-                logger.exception("failed to parse %s", doc.file_path)
+                logger.exception("failed to process %s", doc.file_path)
             await session.commit()
 
         job.status = "done" if not job.per_file_errors else "failed"

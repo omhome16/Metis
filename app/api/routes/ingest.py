@@ -75,7 +75,7 @@ async def ingest_files(
                 corpus=corpus,
                 format=fmt,
                 content_hash=digest,
-                file_path=str(path),
+                file_path=path.as_posix(),  # forward slashes: worker matches on 'uploads/{job_id}/%'
             )
         )
         added += 1
