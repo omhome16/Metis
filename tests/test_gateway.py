@@ -59,3 +59,60 @@ async def test_all_providers_fail_raises():
 def test_estimate_cost():
     assert estimate_cost_usd("llama-3.3-70b-versatile", {"in": 1_000_000, "out": 0}) == pytest.approx(0.59)
     assert estimate_cost_usd("unknown-model", {"in": 100, "out": 100}) == 0.0
+
+
+class Retry429(Exception):
+    status_code = 429
+
+
+class FlakyProvider(LLMClient):
+    name = "groq"
+
+    def __init__(self):
+        self.calls = 0
+
+    async def chat(self, *args, **kwargs):
+        from app.gateway.base import ChatResult
+
+        self.calls += 1
+        if self.calls < 3:
+            raise Retry429("rate limited")
+        return ChatResult(text="recovered", model="m")
+
+    async def chat_stream(self, *args, **kwargs):
+        raise AssertionError("unused")
+        yield  # pragma: no cover
+
+    async def structured(self, *args, **kwargs):
+        raise AssertionError("unused")
+
+
+async def test_retry_backoff_on_429():
+    flaky = FlakyProvider()
+    gw = LLMGateway(_settings(primary_provider="groq"), clients={"groq": flaky})
+    result = await gw.chat("generation", [{"role": "user", "content": "hi"}])
+    assert result.text == "recovered"
+    assert flaky.calls == 3  # retried twice, succeeded on third
+
+
+class MidStreamFailProvider(LLMClient):
+    name = "groq"
+
+    async def chat(self, *args, **kwargs):
+        raise AssertionError("unused")
+
+    async def chat_stream(self, *args, **kwargs):
+        yield "partial answer "
+        raise RuntimeError("provider died mid-stream")
+
+    async def structured(self, *args, **kwargs):
+        raise AssertionError("unused")
+
+
+async def test_midstream_failure_does_not_splice_fallback():
+    gw = LLMGateway(_settings(primary_provider="groq"), clients={"groq": MidStreamFailProvider()})
+    tokens = []
+    with pytest.raises(RuntimeError, match="mid-stream"):
+        async for token in gw.chat_stream("generation", [{"role": "user", "content": "hi"}]):
+            tokens.append(token)
+    assert "".join(tokens) == "partial answer "  # mock fallback output was NOT appended

@@ -55,8 +55,6 @@ async def test_ask_route_serves_cached_answer(client, require_redis):
         embs = await embedder.embed_texts(["FastAPI is built on Starlette and Pydantic."])
         await store_chunks(session, doc.id, ["FastAPI is built on Starlette and Pydantic."], embs)
 
-    from app.gateway.mock import MockProvider
-
     class CachedFakeGateway:
         async def chat_stream(self, task, messages, temperature=0.7, max_tokens=None):
             yield "Cached-able answer [1]. "

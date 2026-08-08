@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     rate_limit_window: int = 60
 
     # ── CORS ───────────────────────────────────────────────────────────────
+    # Set METIS_CORS_ORIGINS (comma-separated) in prod; dev default allows all.
     cors_origins: list[str] = ["*"]
 
     @field_validator("groq_api_key", "gemini_api_key", mode="before")

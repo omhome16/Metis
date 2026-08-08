@@ -11,6 +11,7 @@ from app.core.errors import register_exception_handlers
 from app.core.limits import RateLimiter, RateLimitMiddleware
 from app.core.logging import get_logger, setup_logging
 from app.db.session import engine
+from app.graph.store import get_graph_store
 
 logger = get_logger("app")
 
@@ -22,16 +23,21 @@ async def lifespan(_: FastAPI):
     yield
     logger.info("Shutting down")
     await engine.dispose()
+    try:
+        await get_graph_store().close()  # close the Neo4j driver pool
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("graph store close failed: %s", exc)
 
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 
 # CORS is added last → outermost, so its headers are present even on 429s.
 app.add_middleware(RateLimitMiddleware, limiter=RateLimiter(settings.rate_limit_max, settings.rate_limit_window))
+# allow_credentials is only valid with explicit origins — skip it for the wildcard dev default.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_credentials=True,
+    allow_credentials=settings.cors_origins != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )

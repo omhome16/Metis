@@ -156,7 +156,7 @@ async def ask_events(
     text_parts: list[str] = []
     try:
         async for token in gateway.chat_stream("generation", assembled.messages):
-            out_tokens += 1
+            out_tokens += len(token.split())  # stream chunks may contain several tokens
             text_parts.append(token)
             yield ("tokens", {"text": token})
     except Exception as exc:  # noqa: BLE001

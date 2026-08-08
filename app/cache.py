@@ -70,6 +70,7 @@ async def cache_store(redis: aioredis.Redis, question: str, corpus: str | None, 
 
 
 async def cache_stats() -> dict:
+    redis = None
     try:
         redis = await get_redis()
         hits, misses = await redis.mget(HIT_COUNTER, MISS_COUNTER)
@@ -78,7 +79,6 @@ async def cache_stats() -> dict:
         count = 0
         async for _ in redis.scan_iter(f"{CACHE_PREFIX}:*"):
             count += 1
-        await redis.aclose()
         total = hits + misses
         return {
             "hits": hits,
@@ -89,3 +89,9 @@ async def cache_stats() -> dict:
     except Exception as exc:  # noqa: BLE001
         logger.warning("cache stats failed: %s", exc)
         return {"hits": 0, "misses": 0, "hit_rate": 0.0, "entries": 0}
+    finally:
+        if redis is not None:
+            try:
+                await redis.aclose()
+            except Exception:  # noqa: BLE001
+                pass

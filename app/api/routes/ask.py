@@ -24,9 +24,9 @@ router = APIRouter(tags=["ask"])
 
 
 class AskRequest(BaseModel):
-    question: str
-    corpus: str | None = None
-    image: str | None = None  # base64 data URL — multimodal (M4)
+    question: str = Field(..., min_length=1, max_length=500)
+    corpus: str | None = Field(None, max_length=128)
+    image: str | None = Field(None, max_length=15_000_000)  # ~11MB base64 data URL — multimodal (M4)
     stream: bool = True
     options: dict = Field(default_factory=dict)
 
@@ -52,15 +52,17 @@ async def ask(request: AskRequest, session: AsyncSession = Depends(get_session))
         if not request.image:
             try:
                 redis = await get_redis()
-                query_vec = await get_embedder().embed_query(request.question)
-                cached = await cache_lookup(redis, query_vec, request.corpus)
-                await redis.aclose()
+                try:
+                    query_vec = await get_embedder().embed_query(request.question)
+                    cached = await cache_lookup(redis, query_vec, request.corpus)
+                finally:
+                    await redis.aclose()  # never leak the client on lookup errors
                 if cached:
-                    logger.info("cache HIT for corpus=%s question=%r", request.corpus, request.question)
+                    logger.info("cache HIT for corpus=%s", request.corpus)
                     async for ev in _cached_events(cached):
                         yield ev
                     return
-                logger.info("cache MISS for corpus=%s question=%r", request.corpus, request.question)
+                logger.info("cache MISS for corpus=%s", request.corpus)
             except Exception as exc:  # noqa: BLE001 — cache must never break ask
                 logger.warning("cache lookup error: %s", exc)
 
@@ -85,18 +87,20 @@ async def ask(request: AskRequest, session: AsyncSession = Depends(get_session))
         if not request.image and collected["done"]:
             try:
                 redis = await get_redis()
-                await cache_store(
-                    redis,
-                    request.question,
-                    request.corpus,
-                    {
-                        "sources": collected["sources"],
-                        "citations": collected["citations"],
-                        "done": collected["done"],
-                        "answer": "".join(collected["answer_parts"]),
-                    },
-                )
-                await redis.aclose()
+                try:
+                    await cache_store(
+                        redis,
+                        request.question,
+                        request.corpus,
+                        {
+                            "sources": collected["sources"],
+                            "citations": collected["citations"],
+                            "done": collected["done"],
+                            "answer": "".join(collected["answer_parts"]),
+                        },
+                    )
+                finally:
+                    await redis.aclose()
             except Exception:  # noqa: BLE001
                 pass
         flush_tracer(tracer)

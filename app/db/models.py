@@ -32,6 +32,7 @@ class Document(Base):
     source_url: Mapped[str | None] = mapped_column(String(1024))
     format: Mapped[str] = mapped_column(String(16))  # pdf | md | txt | image
     content_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # sha256 → idempotent ingest
+    ingest_job_id: Mapped[str | None] = mapped_column(String(36), index=True)
     raw_text: Mapped[str | None] = mapped_column(Text)
     file_path: Mapped[str | None] = mapped_column(String(1024))
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

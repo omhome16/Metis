@@ -32,6 +32,9 @@ _ALLOWED: dict[str, str] = {
     ".webp": "image",
 }
 
+# Hard cap on uploaded file size (memory DoS guard).
+MAX_FILE_BYTES = 50 * 1024 * 1024
+
 
 def infer_format(filename: str | None) -> str | None:
     if not filename:
@@ -57,7 +60,7 @@ async def ingest_files(
         fmt = infer_format(upload.filename)
         if fmt is None:
             raise HTTPException(status_code=400, detail=f"Unsupported file type: {upload.filename}")
-        content = await upload.read()
+        content = await _read_limited(upload)
         digest = hashlib.sha256(content).hexdigest()
         # Idempotent ingestion: same bytes → skip.
         existing = (
@@ -75,7 +78,8 @@ async def ingest_files(
                 corpus=corpus,
                 format=fmt,
                 content_hash=digest,
-                file_path=path.as_posix(),  # forward slashes: worker matches on 'uploads/{job_id}/%'
+                ingest_job_id=job_id,
+                file_path=path.as_posix(),
             )
         )
         added += 1
@@ -83,6 +87,21 @@ async def ingest_files(
     await session.commit()
     await enqueue_ingest_job(job_id)
     return IngestResponse(job_id=job_id, status="queued", files_added=added)
+
+
+async def _read_limited(upload: UploadFile) -> bytes:
+    """Read the upload in chunks, rejecting files over MAX_FILE_BYTES."""
+    chunks: list[bytes] = []
+    size = 0
+    while True:
+        chunk = await upload.read(1024 * 1024)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > MAX_FILE_BYTES:
+            raise HTTPException(status_code=413, detail=f"File too large (max {MAX_FILE_BYTES // (1024 * 1024)} MB): {upload.filename}")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @router.get("/{job_id}", response_model=JobStatus)

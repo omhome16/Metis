@@ -5,6 +5,7 @@ Task → preferred provider (blueprint §7):
 Any provider can back up any other; the deterministic mock is the final safety net.
 """
 
+import asyncio
 from collections.abc import AsyncIterator
 from functools import lru_cache
 
@@ -16,6 +17,16 @@ from app.gateway.groq import GroqProvider
 from app.gateway.mock import MockProvider
 
 logger = get_logger(__name__)
+
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 1.0  # seconds, exponential backoff (honor 429/5xx)
+
+
+def _is_retryable(exc: Exception) -> bool:
+    status = getattr(exc, "status_code", None)
+    if status is not None:
+        return status in (429,) or status >= 500
+    return isinstance(exc, (TimeoutError, ConnectionError, OSError))
 
 # task → preferred provider
 TASK_PROVIDER: dict[str, str] = {
@@ -62,6 +73,19 @@ class LLMGateway:
         return self._settings.vision_model  # gemini flash family covers extraction/vision/judge
 
     # ── calls ───────────────────────────────────────────────────────────────
+    async def _call_with_retry(self, fn, *args, **kwargs) -> ChatResult | dict:
+        delay = RETRY_BASE_DELAY
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                return await fn(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001
+                if attempt >= MAX_RETRIES or not _is_retryable(exc):
+                    raise
+                logger.warning("retryable provider error (attempt %d): %s", attempt + 1, exc)
+                await asyncio.sleep(delay)
+                delay *= 2
+        raise RuntimeError("unreachable")  # pragma: no cover
+
     async def chat(
         self,
         task: str,
@@ -73,7 +97,10 @@ class LLMGateway:
         errors: list[str] = []
         for client in self._candidates(task):
             try:
-                return await client.chat(messages, self._model_for(client.name, task), temperature, max_tokens)
+                result = await self._call_with_retry(
+                    client.chat, messages, self._model_for(client.name, task), temperature, max_tokens
+                )
+                return result
             except Exception as exc:  # noqa: BLE001 — any failure falls through the chain
                 errors.append(f"{client.name}: {exc}")
                 logger.warning("provider %s failed for task %s: %s", client.name, task, exc)
@@ -89,11 +116,17 @@ class LLMGateway:
         max_tokens = max_tokens or self._settings.max_tokens
         errors: list[str] = []
         for client in self._candidates(task):
+            started = False
             try:
                 async for token in client.chat_stream(messages, self._model_for(client.name, task), temperature, max_tokens):
+                    started = True
                     yield token
                 return
             except Exception as exc:  # noqa: BLE001
+                if started:
+                    # never splice a partial answer onto a fallback provider's output
+                    logger.error("stream provider %s failed mid-stream for task %s: %s", client.name, task, exc)
+                    raise
                 errors.append(f"{client.name}: {exc}")
                 logger.warning("stream provider %s failed for task %s: %s", client.name, task, exc)
         raise RuntimeError(f"all LLM providers failed for task '{task}': {' | '.join(errors)}")
@@ -102,7 +135,9 @@ class LLMGateway:
         errors: list[str] = []
         for client in self._candidates(task):
             try:
-                return await client.structured(messages, self._model_for(client.name, task), json_schema)
+                return await self._call_with_retry(
+                    client.structured, messages, self._model_for(client.name, task), json_schema
+                )
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{client.name}: {exc}")
                 logger.warning("structured provider %s failed for task %s: %s", client.name, task, exc)

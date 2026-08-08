@@ -21,6 +21,9 @@ class RateLimiter:
             return False
         recent.append(now)
         self._hits[key] = recent
+        if len(self._hits) > 10_000:  # bound memory: drop expired buckets
+            cutoff = now - self.window
+            self._hits = {k: [t for t in v if t > cutoff] for k, v in self._hits.items() if any(t > cutoff for t in v)}
         return True
 
     def reset(self) -> None:

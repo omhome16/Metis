@@ -49,13 +49,7 @@ async def process_ingest_job(ctx: dict, job_id: str) -> None:
         await session.commit()
 
         docs = (
-            (
-                await session.execute(
-                    select(Document).where(Document.file_path.like(f"uploads/{job_id}/%"))
-                )
-            )
-            .scalars()
-            .all()
+            (await session.execute(select(Document).where(Document.ingest_job_id == job_id))).scalars().all()
         )
         total = max(len(docs), 1)
         for i, doc in enumerate(docs):

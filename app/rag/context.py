@@ -41,7 +41,7 @@ def assemble_context(
         block = f"[{n}] ({hit.doc_title}) {hit.chunk.text.strip()}"
         tokens = count_tokens(block)
         if tokens_used + tokens > budget and blocks:
-            break  # truncate lowest-relevance chunk last
+            break  # truncate lowest-relevance chunk last (first chunk always fits: better than empty context)
         blocks.append(block)
         citations.append({"n": n, "chunk_id": hit.chunk.id, "doc": hit.doc_title})
         tokens_used += tokens
