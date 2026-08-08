@@ -1,0 +1,72 @@
+# Render blueprint — deploy METIS to the free tier (blueprint §14).
+# Docs: https://render.com/docs/blueprint-spec
+databases:
+  - name: metis-db
+    databaseName: metis
+    user: metis
+    plan: free
+    ipAllowList: []
+
+services:
+  - type: redis
+    name: metis-cache
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []
+
+  - type: web
+    name: metis-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: METIS_ENV
+        value: prod
+      - key: METIS_DB_URL
+        fromDatabase:
+          name: metis-db
+          property: connectionString
+      - key: METIS_REDIS_URL
+        fromService:
+          type: redis
+          name: metis-cache
+          property: connectionString
+      - key: METIS_NEO4J_URI
+        sync: false
+      - key: METIS_NEO4J_USER
+        sync: false
+      - key: METIS_NEO4J_PASSWORD
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+
+  - type: worker
+    name: metis-worker
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    command: uv run arq app.workers.settings.WorkerSettings
+    envVars:
+      - key: METIS_ENV
+        value: prod
+      - key: METIS_DB_URL
+        fromDatabase:
+          name: metis-db
+          property: connectionString
+      - key: METIS_REDIS_URL
+        fromService:
+          type: redis
+          name: metis-cache
+          property: connectionString
+      - key: METIS_NEO4J_URI
+        sync: false
+      - key: METIS_NEO4J_USER
+        sync: false
+      - key: METIS_NEO4J_PASSWORD
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false

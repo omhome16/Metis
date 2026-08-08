@@ -60,6 +60,13 @@ class Settings(BaseSettings):
     query_rewrite: bool = True
     rerank_enabled: bool = True
 
+    # ── Observability / limits ─────────────────────────────────────────────
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "https://cloud.langfuse.com"
+    rate_limit_max: int = 120
+    rate_limit_window: int = 60
+
     # ── CORS ───────────────────────────────────────────────────────────────
     cors_origins: list[str] = ["*"]
 
