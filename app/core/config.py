@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     clip_model: str = "clip-ViT-B-32"
     clip_dim: int = 512
 
-    # ── Retrieval / chunking ───────────────────────────────────────────────
+    # ── Retrieval / chunking / context engineering (M5) ───────────────────
     chunk_size: int = 512
     chunk_overlap: int = 64
     top_k_vector: int = 10
@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     rerank_candidates: int = 20
     top_k_rerank: int = 5
     cache_similarity_threshold: float = 0.92
+    query_rewrite: bool = True
+    rerank_enabled: bool = True
 
     # ── CORS ───────────────────────────────────────────────────────────────
     cors_origins: list[str] = ["*"]

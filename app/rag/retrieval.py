@@ -1,8 +1,8 @@
-"""Retrieval layer. M2: pure pgvector cosine search. Hybrid (+tsvector, RRF) in M5."""
+"""Retrieval layer: pgvector cosine + Postgres tsvector keyword, fused with RRF."""
 
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Chunk, Document, ImageRecord
@@ -73,12 +73,68 @@ async def fetch_chunks_by_id(session: AsyncSession, chunk_ids: list[str]) -> lis
 
 
 def merge_hits(hits: list[ChunkHit], extra: list[ChunkHit], top_k: int = 20) -> list[ChunkHit]:
-    """Union by chunk id, keeping the best score; preserves original order (RRF comes in M5)."""
+    """Union by chunk id, keeping the best score."""
     seen: dict[str, ChunkHit] = {}
     for hit in [*hits, *extra]:
         if hit.chunk.id not in seen or hit.score > seen[hit.chunk.id].score:
             seen[hit.chunk.id] = hit
     return sorted(seen.values(), key=lambda h: h.score, reverse=True)[:top_k]
+
+
+# ── keyword search (Postgres full-text) ───────────────────────────────────────
+
+
+def _chunk_from_row(row) -> Chunk:
+    """Rebuild a lightweight Chunk from a raw keyword-search row."""
+    return Chunk(
+        id=row[0], doc_id=row[1], text=row[2], chunk_index=row[3], tokens=row[4], embedding=None
+    )
+
+
+async def keyword_search(
+    session: AsyncSession,
+    query: str,
+    corpus: str | None = None,
+    top_k: int = 10,
+) -> list[ChunkHit]:
+    """Postgres tsvector search ranked by ts_rank (BM25-style)."""
+    if not query.strip():
+        return []
+    sql = (
+        "SELECT c.id, c.doc_id, c.text, c.chunk_index, c.tokens, d.title, "
+        "ts_rank(to_tsvector('english', c.text), plainto_tsquery('english', :q)) AS rank "
+        "FROM chunks c JOIN documents d ON d.id = c.doc_id "
+        "WHERE to_tsvector('english', c.text) @@ plainto_tsquery('english', :q) "
+    )
+    params: dict = {"q": query, "limit": top_k}
+    if corpus:
+        sql += "AND d.corpus = :corpus "
+        params["corpus"] = corpus
+    sql += "ORDER BY rank DESC LIMIT :limit"
+    rows = (await session.execute(text(sql), params)).all()
+    hits: list[ChunkHit] = []
+    for row in rows:
+        chunk = _chunk_from_row(row[:5])
+        title = row[5]
+        rank = float(row[6] or 0.0)
+        hits.append(ChunkHit(chunk=chunk, score=round(rank, 4), doc_title=title))
+    return hits
+
+
+def fuse_hybrid(vector_hits: list[ChunkHit], keyword_hits: list[ChunkHit], top_k: int = 20, k: int = 60) -> list[ChunkHit]:
+    """Reciprocal Rank Fusion over the ranked lists from each retriever."""
+    scores: dict[str, float] = {}
+    for ranked in (vector_hits, keyword_hits):
+        for i, hit in enumerate(ranked):
+            scores[hit.chunk.id] = scores.get(hit.chunk.id, 0.0) + 1.0 / (k + i + 1)
+    by_id = {hit.chunk.id: hit for hit in [*vector_hits, *keyword_hits]}
+    ordered = sorted(scores.items(), key=lambda kv: -kv[1])[:top_k]
+    result: list[ChunkHit] = []
+    for chunk_id, score in ordered:
+        hit = by_id[chunk_id]
+        hit.score = round(score, 4)
+        result.append(hit)
+    return result
 
 
 # ── image retrieval ─────────────────────────────────────────────────────────────

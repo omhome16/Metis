@@ -1,9 +1,10 @@
 """The /ask pipeline (blueprint §8.2).
 
 Emits `(event, data)` tuples consumed by the SSE route:
-  sources → tokens → citations → done
-Graph-boosted retrieval (M3) and image-aware ask (M4) plug in here; hybrid/
-rerank/grounding (M5) and the contradiction scan (M5) extend the same contract.
+  sources → tokens → citations → contradiction → done
+
+M5 wiring: query rewriting, hybrid retrieval (vector + tsvector + RRF), graph
+boost, local reranking, citation grounding, and the contradiction scan.
 """
 
 import base64
@@ -19,9 +20,20 @@ from app.gateway.gateway import LLMGateway, estimate_cost_usd
 from app.graph.extraction import extract_entities
 from app.graph.store import get_graph_store
 from app.rag.chunking import count_tokens
+from app.rag.contradiction import check_contradiction, parse_citations
 from app.rag.context import assemble_context
 from app.rag.embeddings import get_embedder, get_image_embedder
-from app.rag.retrieval import fetch_chunks_by_id, image_search, merge_hits, vector_search
+from app.rag.rerank import get_reranker
+from app.rag.retrieval import (
+    ChunkHit,
+    fetch_chunks_by_id,
+    fuse_hybrid,
+    image_search,
+    keyword_search,
+    merge_hits,
+    vector_search,
+)
+from app.rag.rewrite import rewrite_query
 
 logger = get_logger(__name__)
 
@@ -41,17 +53,27 @@ async def retrieve_context(
     gateway: LLMGateway,
     question: str,
     corpus: str | None,
-) -> list:
-    """Vector search first, then graph-boost: entities from the question → Neo4j
-    neighbor chunks. Gracefully skips the graph when Neo4j is unreachable."""
+) -> tuple[list[ChunkHit], str]:
+    """Query rewrite → hybrid (vector+keyword, RRF) → graph boost → rerank."""
+    rewritten = question
+    if settings.query_rewrite:
+        try:
+            candidate = await rewrite_query(gateway, question)
+            if candidate:
+                rewritten = candidate
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("query rewrite skipped: %s", exc)
+
     embedder = get_embedder()
-    query_vec = await embedder.embed_query(question)
-    hits = await vector_search(session, query_vec, corpus=corpus, top_k=settings.rerank_candidates)
+    query_vec = await embedder.embed_query(rewritten)
+    vector_hits = await vector_search(session, query_vec, corpus=corpus, top_k=settings.rerank_candidates)
+    keyword_hits = await keyword_search(session, rewritten, corpus=corpus, top_k=settings.rerank_candidates)
+    hits = fuse_hybrid(vector_hits, keyword_hits, top_k=settings.rerank_candidates)
 
     try:
         store = get_graph_store()
         if await store.ping():
-            extracted = await extract_entities(gateway, question, max_chars=4000)
+            extracted = await extract_entities(gateway, rewritten, max_chars=4000)
             names = [e["name"] for e in extracted.get("entities", [])][:8]
             if names:
                 chunk_ids = await store.neighbor_chunk_ids(names, max_hops=2, limit=10)
@@ -60,7 +82,33 @@ async def retrieve_context(
     except Exception as exc:  # noqa: BLE001 — graph boost must never break ask
         logger.warning("graph boost skipped: %s", exc)
 
-    return hits
+    if settings.rerank_enabled:
+        hits = await get_reranker().rerank(rewritten, hits, top_k=settings.top_k_rerank)
+
+    return hits, rewritten
+
+
+async def contradiction_scan(
+    gateway: LLMGateway,
+    hits: list[ChunkHit],
+) -> dict | None:
+    """Compare the two top chunks; surface a 'sources disagree' alert if they conflict."""
+    if len(hits) < 2:
+        return None
+    a, b = hits[0].chunk, hits[1].chunk
+    try:
+        store = get_graph_store()
+        if not await store.ping():
+            return None
+        if await store.has_contradiction(a.id, b.id):
+            return {"alert": "sources disagree", "chunks": [a.id, b.id], "reason": "previously detected"}
+        verdict = await check_contradiction(gateway, a.text, b.text)
+        if verdict["contradicts"]:
+            await store.add_contradiction(a.id, b.id)
+            return {"alert": "sources disagree", "chunks": [a.id, b.id], "reason": verdict["reason"]}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("contradiction scan skipped: %s", exc)
+    return None
 
 
 async def ask_events(
@@ -72,14 +120,13 @@ async def ask_events(
 ) -> AsyncIterator[tuple[str, dict]]:
     answer_id = str(uuid.uuid4())
 
-    hits = await retrieve_context(session, gateway, question, corpus)
+    hits, _rewritten = await retrieve_context(session, gateway, question, corpus)
 
     image_hits: list = []
     if image:
         try:
             mime, image_bytes = parse_image_data_url(image)
-            embedder = get_image_embedder()
-            query_vec = await embedder.embed_image(image_bytes, mime)
+            query_vec = await get_image_embedder().embed_image(image_bytes, mime)
             image_hits = await image_search(session, query_vec, corpus=corpus, top_k=3)
         except Exception as exc:  # noqa: BLE001
             logger.warning("image query failed: %s", exc)
@@ -91,9 +138,7 @@ async def ask_events(
         ]
     yield ("sources", sources)
 
-    image_captions = [
-        {"doc": h.doc_title, "caption": h.image.caption or "", "tags": h.image.tags} for h in image_hits
-    ]
+    image_captions = [{"doc": h.doc_title, "caption": h.image.caption or "", "tags": h.image.tags} for h in image_hits]
     assembled = assemble_context(question, hits, image_captions=image_captions)
     prompt_tokens = count_tokens(assembled.user_text)
 
@@ -111,7 +156,20 @@ async def ask_events(
 
     answer = "".join(text_parts)
     usage = {"in": prompt_tokens, "out": out_tokens}
-    yield ("citations", {"citations": assembled.citations})
+
+    # Grounding: keep only citations the answer actually references.
+    emitted = parse_citations(answer)
+    if emitted:
+        kept = [c for c in assembled.citations if c["n"] in emitted]
+        dropped = [c["n"] for c in assembled.citations if c["n"] not in emitted]
+        yield ("citations", {"citations": kept, "dropped": dropped, "grounded": True})
+    else:
+        yield ("citations", {"citations": assembled.citations, "grounded": False})
+
+    alert = await contradiction_scan(gateway, hits)
+    if alert:
+        yield ("contradiction", alert)
+
     yield (
         "done",
         {

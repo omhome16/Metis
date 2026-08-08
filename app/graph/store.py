@@ -202,6 +202,22 @@ class GraphStore:
         words = [w for w in re.findall(r"\b[A-Z][a-zA-Z]+\b", caption or "") if w.lower() not in stop]
         return words[:8]
 
+    async def add_contradiction(self, chunk_a: str, chunk_b: str) -> None:
+        async with self._driver.session() as session:
+            await session.run(
+                "MERGE (a:Chunk {id: $a}) MERGE (b:Chunk {id: $b}) MERGE (a)-[:CONTRADICTS]->(b)",
+                a=chunk_a, b=chunk_b,
+            )
+
+    async def has_contradiction(self, chunk_a: str, chunk_b: str) -> bool:
+        async with self._driver.session() as session:
+            result = await session.run(
+                "MATCH (a:Chunk {id: $a})-[r:CONTRADICTS]-(b:Chunk {id: $b}) RETURN count(r) AS n",
+                a=chunk_a, b=chunk_b,
+            )
+            record = await result.single()
+            return bool(record and record["n"] > 0)
+
     async def entity_count(self, corpus: str) -> int:
         query = (
             "MATCH (d:Document {corpus: $corpus})-[:CONTAINS]->(:Chunk)-[:MENTIONS]->(e:Entity) "
