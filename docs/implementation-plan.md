@@ -14,6 +14,13 @@ test, and a **git commit + push**. Phases are committed in sub-steps where sensi
 | 6 — Eval harness | M6 | Golden datasets (arts + tech), RAGAS metrics (faithfulness, answer relevancy, context precision/recall), config matrix, `/evals/*` | a config-matrix run produces a metrics report |
 | 7 — Hardening | M7 | Redis semantic cache, Langfuse tracing, robust error handling + DLQ, deploy configs (Render/Railway + AuraDB) | cache hit served; traces captured; deploy docs complete |
 
+## Status: ALL PHASES COMPLETE ✅
+
+Every phase is implemented, tested (70 pytest tests), validated live against the local
+Docker stack, and pushed to `origin/main` as its own commit. End-to-end demos verified:
+real bge-m3 embeddings, hybrid retrieval, graph nodes, CLIP image retrieval, semantic
+cache hits (`cached: true`), and a config-matrix eval run.
+
 ## Working notes (decisions & deviations from blueprint)
 
 - **Skeletons are pushed early**: infra and data-model phases land before any ML weights are
