@@ -27,7 +27,7 @@ async def ask(request: AskRequest, session: AsyncSession = Depends(get_session))
     gateway = get_gateway()
 
     async def event_stream():
-        async for event, data in ask_events(session, gateway, request.question, request.corpus):
+        async for event, data in ask_events(session, gateway, request.question, request.corpus, image=request.image):
             yield ServerSentEvent(event=event, data=json.dumps(data))
 
     return EventSourceResponse(event_stream())

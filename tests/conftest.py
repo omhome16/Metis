@@ -9,6 +9,7 @@ import os
 os.environ.setdefault("METIS_ENV", "test")
 os.environ.setdefault("METIS_EMBED_MODEL", "mock")  # never download weights in tests
 os.environ.setdefault("METIS_RERANK_MODEL", "mock")
+os.environ.setdefault("METIS_CLIP_MODEL", "mock")
 
 import asyncio  # noqa: E402
 

@@ -57,4 +57,6 @@ class MockProvider(LLMClient):
         return {}
 
     async def describe_image(self, image_b64: str, prompt: str, mime_type: str = "image/png") -> str:
-        return f"[mock-vision] described {len(image_b64)} base64 chars: {prompt[:60]}"
+        return json.dumps(
+            {"caption": "A mock description of the uploaded image.", "tags": ["mock", "test"]}
+        )

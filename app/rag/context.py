@@ -25,7 +25,12 @@ class AssembledContext:
     user_text: str = ""
 
 
-def assemble_context(question: str, hits: list[ChunkHit], settings: Settings | None = None) -> AssembledContext:
+def assemble_context(
+    question: str,
+    hits: list[ChunkHit],
+    settings: Settings | None = None,
+    image_captions: list[dict] | None = None,
+) -> AssembledContext:
     s = settings or get_settings()
     blocks: list[str] = []
     citations: list[dict] = []
@@ -41,10 +46,17 @@ def assemble_context(question: str, hits: list[ChunkHit], settings: Settings | N
         citations.append({"n": n, "chunk_id": hit.chunk.id, "doc": hit.doc_title})
         tokens_used += tokens
 
+    image_lines: list[str] = []
+    for cap in image_captions or []:
+        line = f"(image: {cap.get('doc', 'image')}) {cap.get('caption', '')} tags={cap.get('tags', [])}"
+        image_lines.append(line)
+        tokens_used += count_tokens(line)
+
     user_content = "\n\n".join(
         [
             "SOURCES:",
             *blocks,
+            *(["IMAGES:", *image_lines] if image_lines else []),
             "",
             f"QUESTION: {question}",
         ]

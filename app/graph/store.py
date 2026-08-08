@@ -178,6 +178,30 @@ class GraphStore:
             ]
         return {"nodes": counts, "top_entities": top}
 
+    async def upsert_image(self, doc_id: str, title: str, corpus: str, caption: str, tags: list[str]) -> None:
+        """Create/merge an Image node: BELONGS_TO its document; DEPICTS caption entities."""
+        async with self._driver.session() as session:
+            await session.run(
+                "MERGE (d:Document {id: $doc_id}) "
+                "MERGE (img:Image {id: $doc_id}) ON CREATE SET img.caption = $caption, img.tags = $tags "
+                "MERGE (img)-[:BELONGS_TO]->(d)",
+                doc_id=doc_id, caption=caption[:500], tags=list(tags)[:10],
+            )
+            for name in self._caption_entities(caption):
+                await session.run(
+                    "MATCH (img:Image {id: $doc_id}) MERGE (e:Entity {name: $name}) "
+                    "MERGE (img)-[:DEPICTS]->(e)",
+                    doc_id=doc_id, name=name,
+                )
+
+    @staticmethod
+    def _caption_entities(caption: str) -> list[str]:
+        import re
+
+        stop = {"the", "a", "an", "this", "that", "image", "picture", "photo", "painting"}
+        words = [w for w in re.findall(r"\b[A-Z][a-zA-Z]+\b", caption or "") if w.lower() not in stop]
+        return words[:8]
+
     async def entity_count(self, corpus: str) -> int:
         query = (
             "MATCH (d:Document {corpus: $corpus})-[:CONTAINS]->(:Chunk)-[:MENTIONS]->(e:Entity) "

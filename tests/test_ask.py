@@ -100,3 +100,37 @@ async def test_ask_empty_corpus_graceful(client, require_db):
     assert events[0][0] == "sources"
     assert events[0][1]["chunks"] == []
     assert events[-1][0] == "done"
+
+
+_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+    "0000000d49444154789c626001000000ffff03000006000557bfabd40000000049454e44ae426082"
+)
+
+
+async def test_ask_with_image(client, require_db):
+    corpus = f"test-img-ask-{uuid.uuid4().hex[:8]}"
+    doc_id = await _seed(corpus)
+    import base64
+
+    from app.rag.embeddings import get_image_embedder
+    from app.rag.retrieval import store_image
+
+    embedder = get_image_embedder()
+    emb = await embedder.embed_image(_PNG, "image/png")
+    async with async_session_factory() as session:
+        await store_image(session, doc_id, "uploads/x/pic.png", "A red sunset over the sea.", ["sunset"], emb)
+
+    data_url = "data:image/png;base64," + base64.b64encode(_PNG).decode()
+    with patch("app.api.routes.ask.get_gateway", return_value=FakeGateway()):
+        resp = await client.post(
+            "/api/v1/ask", json={"question": "What is in this image?", "corpus": corpus, "image": data_url}
+        )
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    sources = dict(events)["sources"]
+    assert "images" in sources
+    assert sources["images"][0]["caption"] == "A red sunset over the sea."
+    assert dict(events)["done"]["answer_id"]
+
+    await _cleanup(corpus)

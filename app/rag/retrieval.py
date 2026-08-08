@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Chunk, Document
+from app.db.models import Chunk, Document, ImageRecord
 
 
 @dataclass
@@ -79,3 +79,49 @@ def merge_hits(hits: list[ChunkHit], extra: list[ChunkHit], top_k: int = 20) -> 
         if hit.chunk.id not in seen or hit.score > seen[hit.chunk.id].score:
             seen[hit.chunk.id] = hit
     return sorted(seen.values(), key=lambda h: h.score, reverse=True)[:top_k]
+
+
+# ── image retrieval ─────────────────────────────────────────────────────────────
+
+
+@dataclass
+class ImageHit:
+    image: ImageRecord
+    score: float
+    doc_title: str
+
+
+async def store_image(
+    session: AsyncSession,
+    doc_id: str,
+    file_path: str,
+    caption: str,
+    tags: list[str],
+    embedding: list[float],
+) -> ImageRecord:
+    row = ImageRecord(doc_id=doc_id, file_path=file_path, caption=caption, tags=tags, embedding=embedding)
+    session.add(row)
+    await session.commit()
+    return row
+
+
+async def image_search(
+    session: AsyncSession,
+    query_embedding: list[float],
+    corpus: str | None = None,
+    top_k: int = 5,
+) -> list[ImageHit]:
+    stmt = (
+        select(
+            ImageRecord,
+            ImageRecord.embedding.cosine_distance(query_embedding).label("distance"),
+            Document.title,
+        )
+        .join(Document, Document.id == ImageRecord.doc_id)
+        .order_by("distance")
+        .limit(top_k)
+    )
+    if corpus:
+        stmt = stmt.where(Document.corpus == corpus)
+    rows = (await session.execute(stmt)).all()
+    return [ImageHit(image=image, score=round(1 - distance, 4), doc_title=title) for image, distance, title in rows]
