@@ -36,8 +36,9 @@ class Settings(BaseSettings):
     primary_provider: str = "groq"  # groq | gemini
     generation_model: str = "llama-3.3-70b-versatile"
     fast_model: str = "llama-3.1-8b-instant"
-    vision_model: str = "gemini-2.5-flash"
-    extraction_model: str = "gemini-2.5-flash"
+    # NOTE: gemini-2.5-flash was retired for new API accounts — use the live flash alias.
+    vision_model: str = "gemini-flash-latest"
+    extraction_model: str = "gemini-flash-latest"
     max_tokens: int = 1024
     request_timeout: float = 60.0
 

@@ -44,6 +44,7 @@ dev = [
     "pytest-asyncio>=0.24",
     "respx>=0.22",
     "ruff>=0.7",
+    "playwright>=1.62",
 ]
 
 # CPU-only torch from the official PyTorch index (avoids multi-GB CUDA wheels).

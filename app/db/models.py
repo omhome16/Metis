@@ -83,6 +83,18 @@ class EvalRun(Base):
     metrics: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class Vault(Base):
+    """A named library of documents (frontend vaults layer)."""
+
+    __tablename__ = "vaults"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    color: Mapped[str | None] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class IngestJob(Base):
     __tablename__ = "ingest_jobs"
 

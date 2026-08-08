@@ -26,9 +26,12 @@ async def test_schema_and_upsert(require_graph):
         ],
         relations=[],
     )
-    stats = await store.stats()
-    assert stats["nodes"].get("Entity", 0) == 3
-    assert stats["nodes"].get("Document", 0) == 1
+    # scoped to the test corpus — the live graph may hold real entities
+    n_entities = await store.entity_count("test-graph")
+    assert n_entities == 3
+    async with store._driver.session() as session:
+        rec = await (await session.run("MATCH (d:Document {corpus: 'test-graph'}) RETURN count(d) AS c")).single()
+    assert rec["c"] == 1
 
 
 async def test_neighbor_chunk_ids(require_graph):

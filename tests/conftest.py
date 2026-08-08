@@ -61,16 +61,32 @@ def require_db():
     return True
 
 
+TEST_GRAPH_CORPORA = ("test-graph", "GraphVault", "Lib")
+
+
+async def _wipe_test_graph(store) -> None:
+    """Remove only test corpora from Neo4j; then sweep doc-less chunks/images and orphaned entities."""
+    async with store._driver.session() as session:
+        await session.run(
+            "MATCH (d:Document) WHERE d.corpus IN $corpora DETACH DELETE d", corpora=list(TEST_GRAPH_CORPORA)
+        )
+        await session.run(
+            "MATCH (c:Chunk) WHERE NOT EXISTS { (c)<-[:CONTAINS]-(:Document) } DETACH DELETE c"
+        )
+        await session.run(
+            "MATCH (i:Image) WHERE NOT EXISTS { (i)-[:BELONGS_TO]->(:Document) } DETACH DELETE i"
+        )
+        await session.run("MATCH (e:Entity) WHERE NOT EXISTS { (e)--() } DELETE e")
+
+
 @pytest.fixture
 async def require_graph():
-    """Skip a test when Neo4j is not reachable; wipe the graph around the test."""
+    """Skip a test when Neo4j is not reachable; wipe only test corpora around it."""
     from app.graph.store import get_graph_store
 
     store = get_graph_store()
     if not await store.ping():
         pytest.skip("Neo4j not reachable — start with: docker compose up -d graph")
-    async with store._driver.session() as session:  # wipe pre-test for isolation
-        await session.run("MATCH (n) DETACH DELETE n")
+    await _wipe_test_graph(store)
     yield store
-    async with store._driver.session() as session:  # wipe post-test
-        await session.run("MATCH (n) DETACH DELETE n")
+    await _wipe_test_graph(store)

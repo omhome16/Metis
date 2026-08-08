@@ -7,10 +7,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.db.models import Document, IngestJob
+from app.db.models import Document, IngestJob, Vault
 from app.db.session import get_session
 from app.schemas.api import IngestResponse, JobStatus
 from app.workers.enqueue import enqueue_ingest_job
@@ -48,6 +49,9 @@ async def ingest_files(
     corpus: Annotated[str, Form()] = "default",
     session: AsyncSession = Depends(get_session),
 ) -> IngestResponse:
+    # Ensure the vault exists so the frontend can always list the corpus.
+    await session.execute(pg_insert(Vault).values(name=corpus).on_conflict_do_nothing(index_elements=["name"]))
+
     job_id = str(uuid.uuid4())
     job = IngestJob(id=job_id, corpus=corpus)
     session.add(job)

@@ -228,6 +228,122 @@ class GraphStore:
             return record["count"] if record else 0
 
 
+    # ── vault / document lifecycle ────────────────────────────────────────
+    async def vault_graph(self, corpus: str, node_limit: int = 150, edge_limit: int = 400) -> dict:
+        """Bounded graph export for one corpus: entity network + doc/image links."""
+        nodes: dict[str, dict] = {}
+        edges: list[dict] = []
+        seen_edges: set[tuple[str, str, str]] = set()
+
+        def add_node(nid: str, label: str, name: str | None = None, ntype: str | None = None, degree: int = 0) -> None:
+            node = nodes.setdefault(
+                nid, {"id": nid, "label": label, "name": name or nid, "type": ntype or label, "degree": 0}
+            )
+            node["degree"] = max(node["degree"], degree)
+
+        def add_edge(source: str, target: str, kind: str, label: str, weight: float = 1.0) -> None:
+            key = (source, target, kind)
+            if key in seen_edges:
+                return
+            seen_edges.add(key)
+            edges.append({"source": source, "target": target, "kind": kind, "label": label, "weight": round(float(weight), 3)})
+
+        try:
+            async with self._driver.session() as session:
+                ent_query = (
+                    "MATCH (d:Document {corpus: $c})-[:CONTAINS]->(:Chunk)-[:MENTIONS]->(e:Entity) "
+                    "WITH e, COUNT { (e)-[]-() } AS degree "
+                    "RETURN e.name AS name, coalesce(e.type, 'Concept') AS type, degree "
+                    "ORDER BY degree DESC LIMIT $nl"
+                )
+                result = await session.run(ent_query, c=corpus, nl=node_limit)
+                entities = [(r["name"], r["type"], r["degree"]) async for r in result]
+                names = [name for name, _, _ in entities]
+                for name, etype, degree in entities:
+                    add_node(name, "Entity", name=name, ntype=etype, degree=degree)
+
+                if names:
+                    edge_query = (
+                        "UNWIND $names AS a "
+                        "MATCH (ea:Entity {name: a})-[r:RELATED_TO]-(eb:Entity) "
+                        "WHERE eb.name IN $names AND a < eb.name "
+                        "RETURN a AS source, eb.name AS target, coalesce(r.type, 'RELATED_TO') AS label, "
+                        "  coalesce(r.weight, 1.0) AS weight "
+                        "ORDER BY weight DESC LIMIT $el"
+                    )
+                    result = await session.run(edge_query, names=names, el=edge_limit)
+                    async for r in result:
+                        add_edge(r["source"], r["target"], "RELATED", r["label"], r["weight"])
+
+                doc_query = "MATCH (d:Document {corpus: $c}) RETURN d.id AS id, d.title AS title"
+                result = await session.run(doc_query, c=corpus)
+                docs = [(r["id"], r["title"]) async for r in result]
+                for did, title in docs:
+                    add_node(did, "Document", name=title, degree=1)
+
+                if docs:
+                    de_query = (
+                        "MATCH (d:Document {corpus: $c})-[:CONTAINS]->(:Chunk)-[:MENTIONS]->(e:Entity) "
+                        "RETURN d.id AS did, e.name AS name, count(*) AS w"
+                    )
+                    result = await session.run(de_query, c=corpus)
+                    async for r in result:
+                        if r["name"] in nodes and r["did"] in nodes:
+                            add_edge(r["did"], r["name"], "MENTIONS", "mentions", r["w"])
+
+                img_query = (
+                    "MATCH (d:Document {corpus: $c})<-[:BELONGS_TO]-(i:Image) "
+                    "RETURN i.id AS id, i.caption AS caption"
+                )
+                result = await session.run(img_query, c=corpus)
+                images = [(r["id"], r["caption"]) async for r in result]
+                for iid, caption in images:
+                    add_node(iid, "Image", name=(caption or "image")[:60], degree=1)
+
+                if images:
+                    ie_query = (
+                        "MATCH (i:Image)-[:BELONGS_TO]->(d:Document {corpus: $c}), "
+                        "(i)-[:DEPICTS]->(e:Entity) "
+                        "RETURN i.id AS iid, e.name AS name"
+                    )
+                    result = await session.run(ie_query, c=corpus)
+                    async for r in result:
+                        if r["name"] in nodes and r["iid"] in nodes:
+                            add_edge(r["iid"], r["name"], "DEPICTS", "depicts", 1.0)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("vault_graph failed for %s: %s", corpus, exc)
+            return {"nodes": [], "edges": []}
+
+        node_list = [n for n in nodes.values() if n["degree"] > 0 or n["label"] != "Entity"]
+        return {"nodes": node_list, "edges": edges[:edge_limit]}
+
+    async def delete_document(self, doc_id: str) -> None:
+        """Remove a document (and its image node, if any) from the graph; prune doc-less nodes."""
+        try:
+            async with self._driver.session() as session:
+                await session.run("MATCH (i:Image {id: $id}) DETACH DELETE i", id=doc_id)
+                await session.run("MATCH (d:Document {id: $id}) DETACH DELETE d", id=doc_id)
+                await self._sweep_orphans(session)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("delete_document failed for %s: %s", doc_id, exc)
+
+    async def delete_vault(self, corpus: str) -> None:
+        """Remove every document + image of a corpus from the graph; prune doc-less nodes."""
+        try:
+            async with self._driver.session() as session:
+                await session.run("MATCH (d:Document {corpus: $c}) DETACH DELETE d", c=corpus)
+                await self._sweep_orphans(session)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("delete_vault failed for %s: %s", corpus, exc)
+
+    @staticmethod
+    async def _sweep_orphans(session) -> None:
+        """Delete chunks/images whose document is gone, then entities left with no edges."""
+        await session.run("MATCH (c:Chunk) WHERE NOT EXISTS { (c)<-[:CONTAINS]-(:Document) } DETACH DELETE c")
+        await session.run("MATCH (i:Image) WHERE NOT EXISTS { (i)-[:BELONGS_TO]->(:Document) } DETACH DELETE i")
+        await session.run("MATCH (e:Entity) WHERE NOT EXISTS { (e)--() } DELETE e")
+
+
 @lru_cache
 def get_graph_store() -> GraphStore:
     return GraphStore(get_settings())

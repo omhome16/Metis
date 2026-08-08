@@ -27,6 +27,32 @@ uv run alembic upgrade head
 uv run uvicorn app.main:app --reload
 ```
 
+## Frontend
+
+A hand-built, dependency-free single-page app served by FastAPI at `/` (no build step —
+vanilla ES modules + CSS custom properties).
+
+- **Vaults** — named libraries (`/vaults` API). Each vault holds its documents, its own
+  knowledge graph, and a chat grounded in that vault's sources.
+- **Documents** — library grid with per-file status, drag-and-drop upload with live job
+  progress, and a detail view (raw content, chunk list, original file).
+- **Graph** — a bespoke canvas force-directed renderer: drag nodes, scroll to zoom,
+  click an entity to expand its neighborhood, search to focus. No graph library — the
+  physics and rendering are ~300 lines of first-party code.
+- **Ask** — SSE chat with token streaming, markdown answers, clickable citation chips,
+  scored source cards, contradiction alerts, image attach, and a semantic-cache replay
+  badge.
+- **Themes** — "Reading Room" (light) and "Night Archive" (dark), system-aware,
+  persisted, with a live-recolored graph. Typefaces (Spectral / Inter / IBM Plex Mono)
+  are self-hosted.
+
+Run the end-to-end UI check (headless Chromium, verifies home/vaults/graph/ask/themes
+and fails on any console error):
+
+```bash
+uv run python scripts/frontend_qa.py
+```
+
 ## API surface (`/api/v1`)
 
 | Endpoint | Method | Purpose |

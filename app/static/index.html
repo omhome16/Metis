@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Metis — Knowledge Vaults</title>
+  <link rel="icon" type="image/svg+xml" href="/static/mark.svg" />
+  <link rel="stylesheet" href="/static/css/tokens.css" />
+  <link rel="stylesheet" href="/static/css/base.css" />
+  <link rel="stylesheet" href="/static/css/components.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="topbar-brand">
+        <span class="brand-mark" id="brandMark"></span>
+        <span class="brand-word">METIS</span>
+      </div>
+      <div class="topbar-context" id="topbarContext"></div>
+      <div class="topbar-actions">
+        <button class="icon-btn" id="themeToggle" title="Switch theme" aria-label="Switch theme"></button>
+      </div>
+    </header>
+
+    <div class="shell">
+      <aside class="rail" id="rail">
+        <div class="rail-head">
+          <span class="rail-label">Vaults</span>
+          <button class="icon-btn rail-add" id="newVaultBtn" title="New vault" aria-label="New vault"></button>
+        </div>
+        <nav class="rail-nav" id="vaultList"></nav>
+        <div class="rail-foot">
+          <div class="rail-caption">A corpus is a library. A vault is how you keep it.</div>
+        </div>
+      </aside>
+
+      <main class="view" id="view"></main>
+    </div>
+
+    <footer class="statusbar" id="statusbar">
+      <div class="statusbar-left">
+        <span class="status-chip" data-svc="db"><span class="dot"></span><span class="chip-label">db</span></span>
+        <span class="status-chip" data-svc="redis"><span class="dot"></span><span class="chip-label">redis</span></span>
+        <span class="status-chip" data-svc="graph"><span class="dot"></span><span class="chip-label">graph</span></span>
+        <span class="status-chip" data-svc="cache"><span class="dot"></span><span class="chip-label">cache</span></span>
+        <span class="status-chip" data-svc="model"><span class="chip-label chip-long">model —</span></span>
+      </div>
+      <div class="statusbar-right">
+        <span class="status-hint">metis · retrieval-augmented knowledge</span>
+      </div>
+    </footer>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+
+  <script type="module" src="/static/js/main.js"></script>
+</body>
+</html>

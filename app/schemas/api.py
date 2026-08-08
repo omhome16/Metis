@@ -1,5 +1,7 @@
 """API request/response schemas."""
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 
@@ -23,3 +25,44 @@ class CorpusSummary(BaseModel):
     chunk_count: int = 0
     image_count: int = 0
     entity_count: int = 0
+
+
+class VaultCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(None, max_length=2000)
+    color: str | None = Field(None, max_length=32)
+
+
+class VaultUpdate(BaseModel):
+    description: str | None = Field(None, max_length=2000)
+    color: str | None = Field(None, max_length=32)
+
+
+class VaultSummary(BaseModel):
+    name: str
+    description: str | None = None
+    color: str | None = None
+    doc_count: int = 0
+    chunk_count: int = 0
+    image_count: int = 0
+    entity_count: int = 0
+    created_at: datetime | None = None
+
+
+class DocumentSummary(BaseModel):
+    id: str
+    title: str
+    corpus: str
+    format: str
+    size: int = 0
+    chunk_count: int = 0
+    image_count: int = 0
+    status: str = "pending"  # indexed | pending | error
+    ingested_at: datetime | None = None
+
+
+class DocumentChunkOut(BaseModel):
+    id: str
+    index: int
+    text: str
+    tokens: int = 0

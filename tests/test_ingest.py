@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, patch
 from sqlalchemy import delete, select
 
 from app.api.routes import ingest as ingest_module
-from app.db.models import Document, IngestJob
+from app.db.models import Document, IngestJob, Vault
 from app.db.session import async_session_factory
 
 
@@ -12,6 +12,7 @@ async def _cleanup(corpus: str) -> None:
     async with async_session_factory() as session:
         await session.execute(delete(Document).where(Document.corpus == corpus))
         await session.execute(delete(IngestJob).where(IngestJob.corpus == corpus))
+        await session.execute(delete(Vault).where(Vault.name == corpus))  # ingest auto-creates vault rows
         await session.commit()
 
 
