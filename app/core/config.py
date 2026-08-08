@@ -50,8 +50,8 @@ class Settings(BaseSettings):
     clip_dim: int = 512
 
     # ── Retrieval / chunking / context engineering (M5) ───────────────────
-    chunk_size: int = 512
-    chunk_overlap: int = 64
+    chunk_size: int = 700
+    chunk_overlap: int = 100
     top_k_vector: int = 10
     top_k_keyword: int = 10
     top_k_graph: int = 10

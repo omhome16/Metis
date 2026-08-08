@@ -66,3 +66,37 @@ class DocumentChunkOut(BaseModel):
     index: int
     text: str
     tokens: int = 0
+
+
+class ConversationCreate(BaseModel):
+    title: str | None = Field(None, max_length=512)
+
+
+class ConversationOut(BaseModel):
+    id: str
+    vault_name: str
+    title: str
+    message_count: int = 0
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class MessageOut(BaseModel):
+    id: str
+    role: str
+    content: str = ""
+    sources: dict | None = None
+    citations: dict | None = None
+    usage: dict | None = None
+    error: str | None = None
+    cached: bool = False
+    created_at: datetime | None = None
+
+
+class ConversationDetail(BaseModel):
+    id: str
+    vault_name: str
+    title: str
+    messages: list[MessageOut] = Field(default_factory=list)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None

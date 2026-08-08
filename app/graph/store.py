@@ -72,6 +72,15 @@ class GraphStore:
                 chunk_id=chunk_id, name=entity_name,
             )
 
+    async def add_doc_mention(self, doc_id: str, entity_name: str) -> None:
+        """Link an entity to a document (used when the name isn't found verbatim in any chunk)."""
+        async with self._driver.session() as session:
+            await session.run(
+                "MATCH (d:Document {id: $doc_id}) MERGE (e:Entity {name: $name}) "
+                "MERGE (e)-[:MENTIONED_IN]->(d)",
+                doc_id=doc_id, name=entity_name,
+            )
+
     async def add_relation(self, source: str, target: str, rel_type: str = "RELATED_TO", evidence_chunk: str | None = None) -> None:
         async with self._driver.session() as session:
             await session.run(
@@ -100,10 +109,18 @@ class GraphStore:
             await self.add_entity(ent["name"], ent.get("type", "Concept"))
 
         # MENTIONS (entity ↔ chunk that contains it) + co-occurrence RELATED_TO
+        for ent in entities:
+            name = ent["name"]
+            mentioned_in_chunk = False
+            for chunk_id, text, index in chunks:
+                if name.lower() in text.lower():
+                    await self.add_mention(chunk_id, name)
+                    mentioned_in_chunk = True
+            if not mentioned_in_chunk and name:
+                # entity extracted but not verbatim in any chunk → document-level link
+                await self.add_doc_mention(doc_id, name)
         for chunk_id, text, index in chunks:
             mentioned = [e["name"] for e in entities if e["name"].lower() in text.lower()]
-            for name in mentioned:
-                await self.add_mention(chunk_id, name)
             if len(mentioned) > 1:
                 pairs = [(mentioned[i], mentioned[j]) for i in range(len(mentioned)) for j in range(i + 1, len(mentioned))]
                 for source, target in pairs[:max_relations_per_chunk]:
@@ -125,11 +142,17 @@ class GraphStore:
         if max_hops >= 2:
             query = (
                 "MATCH (e:Entity)-[:RELATED_TO*1..2]-(e2:Entity)-[:MENTIONS]-(c:Chunk) "
+                "WHERE e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit "
+                "UNION "
+                "MATCH (e:Entity)-[:MENTIONED_IN]->(:Document)-[:CONTAINS]->(c:Chunk) "
                 "WHERE e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit"
             )
         else:
             query = (
                 "MATCH (e:Entity)-[:MENTIONS]-(c:Chunk) "
+                "WHERE e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit "
+                "UNION "
+                "MATCH (e:Entity)-[:MENTIONED_IN]->(:Document)-[:CONTAINS]->(c:Chunk) "
                 "WHERE e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit"
             )
         async with self._driver.session() as session:
@@ -221,11 +244,17 @@ class GraphStore:
     async def entity_count(self, corpus: str) -> int:
         query = (
             "MATCH (d:Document {corpus: $corpus})-[:CONTAINS]->(:Chunk)-[:MENTIONS]->(e:Entity) "
-            "RETURN count(DISTINCT e) AS count"
+            "RETURN DISTINCT e.name AS n "
+            "UNION "
+            "MATCH (e:Entity)-[:MENTIONED_IN]->(d:Document {corpus: $corpus}) "
+            "RETURN DISTINCT e.name AS n"
         )
+        names: set[str] = set()
         async with self._driver.session() as session:
-            record = await (await session.run(query, corpus=corpus)).single()
-            return record["count"] if record else 0
+            result = await session.run(query, corpus=corpus)
+            async for rec in result:
+                names.add(rec["n"])
+        return len(names)
 
 
     # ── vault / document lifecycle ────────────────────────────────────────
@@ -251,7 +280,12 @@ class GraphStore:
         try:
             async with self._driver.session() as session:
                 ent_query = (
-                    "MATCH (d:Document {corpus: $c})-[:CONTAINS]->(:Chunk)-[:MENTIONS]->(e:Entity) "
+                    "MATCH (d:Document {corpus: $c}) "
+                    "MATCH (d)-[:CONTAINS]->(:Chunk)-[:MENTIONS]->(e:Entity) "
+                    "WITH e, COUNT { (e)-[]-() } AS degree "
+                    "RETURN e.name AS name, coalesce(e.type, 'Concept') AS type, degree "
+                    "UNION "
+                    "MATCH (e:Entity)-[:MENTIONED_IN]->(d:Document {corpus: $c}) "
                     "WITH e, COUNT { (e)-[]-() } AS degree "
                     "RETURN e.name AS name, coalesce(e.type, 'Concept') AS type, degree "
                     "ORDER BY degree DESC LIMIT $nl"
@@ -284,7 +318,10 @@ class GraphStore:
                 if docs:
                     de_query = (
                         "MATCH (d:Document {corpus: $c})-[:CONTAINS]->(:Chunk)-[:MENTIONS]->(e:Entity) "
-                        "RETURN d.id AS did, e.name AS name, count(*) AS w"
+                        "RETURN d.id AS did, e.name AS name, count(*) AS w "
+                        "UNION "
+                        "MATCH (e:Entity)-[:MENTIONED_IN]->(d:Document {corpus: $c}) "
+                        "RETURN d.id AS did, e.name AS name, 1 AS w"
                     )
                     result = await session.run(de_query, c=corpus)
                     async for r in result:

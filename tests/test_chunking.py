@@ -10,20 +10,31 @@ def test_chunk_empty():
     assert chunk_text("   ") == []
 
 
-def test_chunk_fixed_size_no_overlap():
-    text = "a" * 100
+def test_chunk_sentence_windows_stay_sentence_boundary():
+    # sentence-boundaried text is windowed at sentence ends, never mid-sentence
+    text = ("A short sentence. " * 60).strip()
     chunks = chunk_text(text, chunk_size=30, overlap=0)
     assert len(chunks) >= 3
-    assert all(len(c) <= 30 for c in chunks)
+    for c in chunks:
+        assert c.endswith(".")  # windows close only on sentence boundaries
 
 
-def test_chunk_joins_whole_text():
+def test_chunk_keeps_cohesive_paragraph_whole():
+    # a single cohesive paragraph without sentence breaks is preserved intact,
+    # not sliced mid-thought — the whole point of paragraph-preserving chunking
     text = " ".join(f"word{i}" for i in range(200))
     chunks = chunk_text(text, chunk_size=200, overlap=20)
     joined = " ".join(chunks)
-    # every word appears somewhere (overlap may repeat a couple of words)
     assert "word199" in joined
+    assert len(chunks) == 1  # one paragraph → one chunk
+
+
+def test_chunk_overlap_carries_tail_between_windows():
+    text = ("One complete sentence. " * 80).strip()
+    chunks = chunk_text(text, chunk_size=120, overlap=24)
     assert len(chunks) > 1
+    for c in chunks:
+        assert c.endswith(".")
 
 
 def test_chunk_prefers_sentence_boundary():

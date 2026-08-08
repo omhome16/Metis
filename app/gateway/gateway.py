@@ -11,7 +11,7 @@ from functools import lru_cache
 
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
-from app.gateway.base import ChatResult, LLMClient
+from app.gateway.base import ChatResult, LLMClient, ToolStreamChunk
 from app.gateway.gemini import GeminiProvider
 from app.gateway.groq import GroqProvider
 from app.gateway.mock import MockProvider
@@ -142,6 +142,42 @@ class LLMGateway:
                 errors.append(f"{client.name}: {exc}")
                 logger.warning("structured provider %s failed for task %s: %s", client.name, task, exc)
         raise RuntimeError(f"all LLM providers failed for structured task '{task}': {' | '.join(errors)}")
+
+    @property
+    def supports_tools(self) -> bool:
+        """True when at least one registered client can call tools."""
+        return any(getattr(c, "supports_tools", False) for c in self._clients.values())
+
+    async def chat_tools_stream(
+        self,
+        task: str,
+        messages: list[dict],
+        tools: list[dict],
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[ToolStreamChunk]:
+        """Tool-calling completion with the same fallback chain as chat_stream."""
+        max_tokens = max_tokens or self._settings.max_tokens
+        errors: list[str] = []
+        for client in self._candidates(task):
+            if not getattr(client, "supports_tools", False):
+                errors.append(f"{client.name}: no tool support")
+                continue
+            started = False
+            try:
+                async for chunk in client.chat_tools_stream(
+                    messages, self._model_for(client.name, task), tools, temperature, max_tokens
+                ):
+                    started = True
+                    yield chunk
+                return
+            except Exception as exc:  # noqa: BLE001
+                if started:
+                    logger.error("tool stream provider %s failed mid-stream for task %s: %s", client.name, task, exc)
+                    raise
+                errors.append(f"{client.name}: {exc}")
+                logger.warning("tool stream provider %s failed for task %s: %s", client.name, task, exc)
+        raise RuntimeError(f"tool-calling unavailable for task '{task}': {' | '.join(errors)}")
 
     async def describe_image(self, image_b64: str, prompt: str, mime_type: str = "image/png") -> str:
         errors: list[str] = []

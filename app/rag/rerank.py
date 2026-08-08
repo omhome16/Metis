@@ -28,6 +28,8 @@ class Reranker:
         model = await asyncio.to_thread(self._load)
         pairs = [(query, h.chunk.text[:1500]) for h in hits]
         scores = await asyncio.to_thread(model.predict, pairs, show_progress_bar=False)
+        for h, s in zip(hits, scores):
+            h.rerank_score = round(float(s), 4)
         ranked = sorted(zip(hits, scores), key=lambda pair: -float(pair[1]))
         return [h for h, _ in ranked[:top_k]]
 
@@ -41,6 +43,8 @@ class MockReranker:
             (h, len(set(h.chunk.text.lower().split()) & query_terms) / max(1, len(query_terms)))
             for h in hits
         ]
+        for h, s in scored:
+            h.rerank_score = round(float(s), 4)
         ranked = sorted(scored, key=lambda pair: -pair[1])
         return [h for h, _ in ranked[:top_k]]
 

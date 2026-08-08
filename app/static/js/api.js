@@ -45,6 +45,10 @@ export const api = {
   docFileUrl: (id) => `/api/v1/documents/${id}/file`,
   deleteDoc: (id) => request("DELETE", `/api/v1/documents/${id}`),
 
+  conversations: (name) => request("GET", `/api/v1/vaults/${enc(name)}/conversations`),
+  conversation: (id) => request("GET", `/api/v1/conversations/${id}`),
+  deleteConversation: (id) => request("DELETE", `/api/v1/conversations/${id}`),
+
   ingest: (corpus, files) => {
     const fd = new FormData();
     fd.append("corpus", corpus);

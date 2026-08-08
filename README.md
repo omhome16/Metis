@@ -42,6 +42,13 @@ vanilla ES modules + CSS custom properties).
 - **Ask** — SSE chat with token streaming, markdown answers, clickable citation chips,
   scored source cards, contradiction alerts, image attach, and a semantic-cache replay
   badge.
+- **ReAct agent** — when the LLM provider supports function calling, the chat runs a
+  tool-augmented reasoning loop: the model itself searches the vault, expands the
+  knowledge graph, and checks background references before answering. The frontend
+  shows a live "thinking" panel with each tool step as it happens.
+- **Conversations** — every exchange is persisted server-side per vault (migration
+  0005). Follow-ups carry full history back into the agent loop; the Ask view lists,
+  switches, renames, and deletes past conversations.
 - **Themes** — "Reading Room" (light) and "Night Archive" (dark), system-aware,
   persisted, with a live-recolored graph. Typefaces (Spectral / Inter / IBM Plex Mono)
   are self-hosted.
@@ -61,7 +68,10 @@ uv run python scripts/frontend_qa.py
 | `/ingest` | POST (multipart) | Upload files + corpus → `job_id` |
 | `/ingest/{job_id}` | GET | Job progress (+ SSE `/ingest/{job_id}/stream`) |
 | `/corpora` | GET | Corpora + doc counts + graph stats |
-| `/ask` | POST | Ask with SSE stream (`sources → tokens → citations → connections → done`) |
+| `/ask` | POST | Ask with SSE stream (`sources → thinking → tokens → citations → done`) |
+| `/vaults/{name}/conversations` | GET/POST | List / create conversations for a vault |
+| `/conversations/{id}` | GET/PATCH/DELETE | Conversation detail, rename, delete |
+| `/conversations/{id}/messages` | GET | Message history for a conversation |
 | `/search` | GET | Raw hybrid search |
 | `/graph/explore` | GET | Subgraph around an entity |
 | `/graph/connections` | GET | Path between two entities |

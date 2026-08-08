@@ -35,7 +35,7 @@ def main():
         assert page.locator(".brand-word").inner_text().strip() == "METIS", "brand missing"
         print("[ok] home: brand present")
         n_vaults = page.locator(".vault-item").count()
-        assert n_vaults >= 3, f"expected >=3 vaults in sidebar, got {n_vaults}"
+        assert n_vaults >= 4, f"expected >=4 vaults in sidebar, got {n_vaults}"
         print(f"[ok] home: {n_vaults} vaults in sidebar")
         page.wait_for_selector(".vault-card", timeout=10000)
         print("[ok] home: overview cards present")
@@ -64,13 +64,26 @@ def main():
         # 4. ask
         page.locator(".tab", has_text="Ask").click()
         page.wait_for_timeout(800)
+        # conversations panel should be present
+        assert page.locator(".ask-panel-label", has_text="Conversations").count() == 1, "conversations panel missing"
+        print("[ok] conversations panel present")
         ta = page.locator(".composer textarea")
         ta.fill("What is RAG and how was it evaluated?")
         page.keyboard.press("Enter")
-        print("[ok] question submitted, waiting for stream...")
-        # wait up to 120s for the meta row (finalized answer)
+        print("[ok] question submitted, watching for thinking UI + stream...")
+        saw_thinking = False
+        deadline = time.time() + 180
+        while time.time() < deadline and page.locator(".msg-meta").count() == 0:
+            if page.locator(".thinking").count() > 0:
+                saw_thinking = True
+            if page.locator(".thinking-log-item").count() > 0:
+                saw_thinking = True
+                print(f"[ok] agent thinking log visible ({page.locator('.thinking-log-item').count()} tool step(s))")
+                break
+            page.wait_for_timeout(400)
+        print(f"[ok] thinking UI observed: {saw_thinking}")
         try:
-            page.wait_for_selector(".msg-meta", timeout=120000)
+            page.wait_for_selector(".msg-meta", timeout=180000)
             print("[ok] answer finalized (msg-meta present)")
         except Exception:
             pass
@@ -82,6 +95,11 @@ def main():
         print("[ok] sources card present")
         cites = page.locator(".cite-chip").count()
         print(f"[ok] citation chips: {cites}")
+        # conversation should be persisted server-side and listed in the panel
+        page.wait_for_selector(".conv-item", timeout=15000)
+        n_conv = page.locator(".conv-item").count()
+        assert n_conv >= 1, "conversation not persisted to the list"
+        print(f"[ok] conversation persisted + listed ({n_conv} in panel)")
         shot(page, "04-ask")
 
         # 5. dark theme

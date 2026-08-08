@@ -1,10 +1,14 @@
-import { el, clear, mdToHtml, esc } from "../util.js";
+import { el, clear, mdToHtml, esc, fmtDate } from "../util.js";
 import { icon } from "../icons.js";
 import { api, askStream } from "../api.js";
 import { renderVaultShell } from "./shell.js";
 import { toast } from "./toast.js";
 
-const HISTORY_KEY = (name) => `metis-chat-${name}`;
+const TOOL_LABEL = {
+  search_vault: "searching vault",
+  graph_lookup: "expanding graph",
+  wikipedia: "wikipedia",
+};
 
 export async function renderAsk(container, vault) {
   const body = renderVaultShell(container, vault, "ask");
@@ -17,12 +21,7 @@ export async function renderAsk(container, vault) {
     el("span", { class: "section-label", text: `Conversation`, style: "margin:0" }),
     el("button", { class: "btn btn-ghost", html: `${icon("refresh", 14)}<span>New conversation</span>`, style: "padding:6px 11px;font-size:12px" }),
   ]);
-  toolbar.querySelector("button").addEventListener("click", () => {
-    localStorage.removeItem(HISTORY_KEY(vault.name));
-    history = [];
-    renderThread();
-    renderSuggestions();
-  });
+  toolbar.querySelector("button").addEventListener("click", startNew);
   chat.append(toolbar);
 
   const thread = el("div", { class: "thread" });
@@ -87,6 +86,16 @@ export async function renderAsk(container, vault) {
 
   // ── right rail ───────────────────────────────────────────
   const rail = el("div", { class: "ask-rail" });
+
+  const convPanel = el("div", { class: "ask-panel" });
+  const convHead = el("div", { class: "conv-toolbar" }, [
+    el("div", { class: "ask-panel-label", text: "Conversations", style: "margin:0" }),
+    el("button", { class: "btn btn-ghost", html: icon("plus", 12), style: "padding:4px 9px;font-size:11px", title: "New conversation" }),
+  ]);
+  const convListEl = el("div", { class: "conv-list" });
+  convPanel.append(convHead, convListEl);
+  convHead.querySelector("button").addEventListener("click", startNew);
+
   const about = el("div", { class: "ask-panel" });
   about.append(
     el("div", { class: "ask-panel-label", text: "Vault context" }),
@@ -97,22 +106,98 @@ export async function renderAsk(container, vault) {
   how.append(
     el("div", { class: "ask-panel-label", text: "How answers are grounded" }),
     el("div", { class: "ask-panel-list" }, [
-      el("p", { class: "ask-panel-empty", text: "Your question is rewritten, then matched against the vault's chunks with hybrid vector + keyword retrieval and a local reranker." }),
-      el("p", { class: "ask-panel-empty", text: "The knowledge graph expands retrieval to related entities, so answers can draw on connections, not just keyword hits." }),
+      el("p", { class: "ask-panel-empty", text: "Metis reasons with tools — searching the vault, expanding the knowledge graph, and checking background references before answering." }),
+      el("p", { class: "ask-panel-empty", text: "Each conversation is stored server-side, so history survives reloads and follow-up questions keep full context." }),
       el("p", { class: "ask-panel-empty", text: "Citations are verified against the retrieved sources; a contradiction scan flags when sources disagree." }),
     ])
   );
-  rail.append(about, how);
+  rail.append(convPanel, about, how);
   layout.append(chat, rail);
 
   // ── state ────────────────────────────────────────────────
-  let history = loadHistory(vault.name);
+  let history = []; // [{role, text, sources, citations, contradiction, cached, usage, error, thinking}]
+  let activeConvId = null;
+  let convList = [];
   let currentAbort = null;
-  let live = null; // {textEl, sourcesCard, metaRow, bannerEl, assistant}
+  let live = null; // {textEl, thinkingEl, logEl, sourcesCard, metaRow, bannerEl, assistant, streaming}
   let streaming = false;
+  let firstTokenSeen = false;
 
+  loadConversations();
   renderThread();
 
+  // ── conversations ─────────────────────────────────────────
+  async function loadConversations() {
+    try {
+      convList = await api.conversations(vault.name);
+    } catch {
+      convList = [];
+    }
+    renderConvList();
+  }
+
+  function renderConvList() {
+    clear(convListEl);
+    if (!convList.length) {
+      convListEl.append(el("p", { class: "conv-empty", text: "No conversations yet. Ask something to begin." }));
+      return;
+    }
+    for (const c of convList) {
+      const item = el("button", { class: `conv-item${c.id === activeConvId ? " active" : ""}`, title: c.title });
+      const del = el("span", { class: "conv-del", html: icon("x", 11), title: "Delete conversation" });
+      item.append(
+        el("span", { class: "conv-title", text: c.title }),
+        el("span", { class: "conv-meta" }, [
+          el("span", { text: `${c.message_count} msgs` }),
+          el("span", { text: fmtDate(c.updated_at) }),
+        ]),
+        del
+      );
+      del.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        await api.deleteConversation(c.id).catch(() => null);
+        if (activeConvId === c.id) startNew();
+        else loadConversations();
+      });
+      item.addEventListener("click", () => {
+        if (c.id !== activeConvId) loadConversation(c.id);
+      });
+      convListEl.append(item);
+    }
+  }
+
+  async function loadConversation(id) {
+    try {
+      const detail = await api.conversation(id);
+      activeConvId = detail.id;
+      history = (detail.messages || []).map((m) => ({
+        role: m.role,
+        text: m.content,
+        sources: m.sources,
+        citations: m.citations,
+        usage: m.usage,
+        cached: m.cached,
+        error: m.error,
+        contradiction: null,
+      }));
+    } catch {
+      activeConvId = null;
+      history = [];
+      toast("Could not load that conversation.", "error");
+    }
+    renderThread();
+    scrollBottom();
+    renderConvList();
+  }
+
+  function startNew() {
+    activeConvId = null;
+    history = [];
+    renderThread();
+    renderConvList();
+  }
+
+  // ── thread rendering ──────────────────────────────────────
   function renderThread() {
     clear(thread);
     live = null;
@@ -137,15 +222,17 @@ export async function renderAsk(container, vault) {
     const msg = el("div", { class: "msg assistant" });
     const bodyEl = el("div", { class: "msg-body" });
     const textEl = el("div", { class: "msg-assistant-text" });
+    textEl.hidden = true;
     bodyEl.append(textEl);
     msg.append(el("div", { class: "msg-avatar", text: "M" }), bodyEl);
     thread.append(msg);
 
-    const slot = { textEl, sourcesCard: null, metaRow: null, bannerEl: null, assistant: m };
+    const slot = { textEl, thinkingEl: null, logEl: null, sourcesCard: null, metaRow: null, bannerEl: null, assistant: m, streaming };
     if (streaming) live = slot;
+    if (!m.text && streaming) showThinking(slot);
     updateText(slot, m, streaming);
 
-    if (m.sources && m.sources.chunks?.length || m.sources?.images?.length) {
+    if (m.sources && (m.sources.chunks?.length || m.sources.images?.length)) {
       slot.sourcesCard = buildSourcesCard(m);
       bodyEl.append(slot.sourcesCard);
     }
@@ -160,9 +247,65 @@ export async function renderAsk(container, vault) {
     return msg;
   }
 
+  function showThinking(slot) {
+    if (slot.thinkingEl) return;
+    const wrap = el("div", { class: "thinking" });
+    wrap.append(
+      el("span", { class: "thinking-dots" }, [el("i"), el("i"), el("i")]),
+      el("span", { class: "thinking-step", text: "thinking" })
+    );
+    const logEl = el("div", { class: "thinking-log" });
+    slot.thinkingEl = wrap;
+    slot.logEl = logEl;
+    slot.textEl.before(wrap);
+    wrap.after(logEl);
+    scrollBottom();
+  }
+
+  function addThinking(slot, data) {
+    if (!slot || !slot.logEl) return;
+    const tool = TOOL_LABEL[data.tool] || data.tool || "gathering evidence";
+    const args = data.args ? prettyArgs(data.args) : "";
+    const item = el("div", { class: "thinking-log-item" }, [
+      el("span", { class: "tl-tool", text: tool }),
+      el("span", { class: "tl-args", text: args }),
+      data.result ? el("span", { class: "tl-result", text: data.result }) : null,
+    ]);
+    slot.logEl.append(item);
+    if (slot.thinkingEl) slot.thinkingEl.querySelector(".thinking-step").textContent = tool;
+    scrollBottom();
+  }
+
+  function prettyArgs(args) {
+    try {
+      const v = typeof args === "string" ? JSON.parse(args) : args;
+      return Object.entries(v || {}).map(([k, val]) => `${k}: ${String(val).slice(0, 60)}`).join(" · ");
+    } catch {
+      return String(args || "").slice(0, 80);
+    }
+  }
+
   function updateText(slot, m, streaming) {
+    if (streaming) {
+      if (!m.text) {
+        if (!slot.thinkingEl) showThinking(slot);
+        return;
+      }
+      // first real tokens → swap thinking indicator for the streaming answer
+      if (slot.thinkingEl) {
+        slot.thinkingEl.remove();
+        slot.thinkingEl = null;
+        if (slot.logEl) { slot.logEl.classList.add("hidden"); }
+        firstTokenSeen = true;
+      }
+      slot.textEl.hidden = false;
+    } else {
+      if (slot.thinkingEl) { slot.thinkingEl.remove(); slot.thinkingEl = null; }
+      if (slot.logEl) slot.logEl.classList.add("hidden");
+      slot.textEl.hidden = !m.text;
+    }
     const cite = (n) => `<span class="cite-chip" data-n="${n}" title="Jump to source ${n}">${n}</span>`;
-    slot.textEl.innerHTML = mdToHtml(m.text, cite) + (streaming ? '<span class="caret"></span>' : "");
+    slot.textEl.innerHTML = mdToHtml(m.text, cite) + (streaming && m.text ? '<span class="caret"></span>' : "");
   }
 
   function buildMetaRow(m) {
@@ -197,7 +340,6 @@ export async function renderAsk(container, vault) {
         el("div", { class: "source-bar" }, [el("div", { class: "fill", style: `width:${Math.min(100, Math.max(8, (c.score || 0) * 100))}%` })]),
         el("div", { class: "source-text", text: c.text })
       );
-      item.addEventListener("click", () => card.classList.add("open"));
       bodyEl.append(item);
     });
     images.forEach((img) => {
@@ -231,6 +373,7 @@ export async function renderAsk(container, vault) {
       .catch(() => { /* no suggestions */ });
   }
 
+  // ── submit / stream ───────────────────────────────────────
   function submit(textOverride) {
     if (currentAbort) return;
     const text = (textOverride ?? ta.value).trim();
@@ -242,10 +385,10 @@ export async function renderAsk(container, vault) {
     ta.style.height = "auto";
 
     const userMsg = { role: "user", text };
-    const assistantMsg = { role: "assistant", text: "", sources: null, citations: null, contradiction: null, cached: false, usage: null, error: null };
+    const assistantMsg = { role: "assistant", text: "", sources: null, citations: null, contradiction: null, cached: false, usage: null, error: null, thinking: [] };
     history.push(userMsg, assistantMsg);
-    persist();
     streaming = true;
+    firstTokenSeen = false;
     renderThread();
     scrollBottom();
     send(userMsg, assistantMsg, image);
@@ -260,9 +403,12 @@ export async function renderAsk(container, vault) {
     let buffer = "";
     try {
       await askStream(
-        { question: userMsg.text, corpus: vault.name, stream: true, image },
+        { question: userMsg.text, corpus: vault.name, stream: true, image, conversation_id: activeConvId || undefined },
         (event, data) => {
-          if (event === "sources") {
+          if (event === "thinking") {
+            assistantMsg.thinking.push(data);
+            addThinking(live, data);
+          } else if (event === "sources") {
             assistantMsg.sources = data;
             if (live) {
               if (live.sourcesCard) live.sourcesCard.remove();
@@ -284,6 +430,10 @@ export async function renderAsk(container, vault) {
           } else if (event === "done") {
             assistantMsg.usage = data;
             assistantMsg.cached = !!data.cached;
+            if (data.conversation_id && !activeConvId) {
+              activeConvId = data.conversation_id;
+              loadConversations();
+            }
           }
         },
         ac.signal
@@ -305,24 +455,7 @@ export async function renderAsk(container, vault) {
         slot.metaRow = buildMetaRow(assistantMsg);
         slot.textEl.closest(".msg-body").append(slot.metaRow);
       }
-      persist();
       scrollBottom();
-    }
-  }
-
-  function persist() {
-    const slim = history.slice(-40).map(({ role, text, sources, contradiction, cached, usage, error }) => ({ role, text, sources, contradiction, cached, usage, error }));
-    localStorage.setItem(HISTORY_KEY(vault.name), JSON.stringify(slim));
-  }
-
-  function loadHistory(name) {
-    try {
-      const raw = localStorage.getItem(HISTORY_KEY(name));
-      if (!raw) return [];
-      const arr = JSON.parse(raw);
-      return Array.isArray(arr) ? arr.filter((m) => m && typeof m.text === "string") : [];
-    } catch {
-      return [];
     }
   }
 
@@ -346,9 +479,6 @@ export async function renderAsk(container, vault) {
     const view = document.getElementById("view");
     requestAnimationFrame(() => { view.scrollTop = view.scrollHeight; });
   }
-
-  // open documents from graph view
-  window.addEventListener("metis:open-doc", () => { /* handled by router if needed */ });
 }
 
 /* ── helpers ──────────────────────────────────────────────── */

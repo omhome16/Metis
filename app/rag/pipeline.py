@@ -1,10 +1,15 @@
 """The /ask pipeline (blueprint §8.2).
 
 Emits `(event, data)` tuples consumed by the SSE route:
-  sources → tokens → citations → contradiction → done
+  sources → [thinking → tokens] → citations → contradiction → done
 
 M5 wiring: query rewriting, hybrid retrieval (vector + tsvector + RRF), graph
 boost, local reranking, citation grounding, and the contradiction scan.
+
+M9 wiring: when the gateway can call tools, a ReAct agent (app.rag.agent) drives
+retrieval with `search_vault` / `graph_lookup` / `wikipedia` and streams
+`thinking` events; conversation history from the previous turns is fed back in.
+Providers without tool support (and image queries) keep the direct path.
 """
 
 import base64
@@ -16,9 +21,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.db.models import Chunk
 from app.gateway.gateway import LLMGateway, estimate_cost_usd
 from app.graph.extraction import extract_entities
 from app.graph.store import get_graph_store
+from app.rag.agent import agent_events
 from app.rag.chunking import count_tokens
 from app.rag.contradiction import check_contradiction, parse_citations
 from app.rag.context import assemble_context
@@ -121,18 +128,39 @@ async def contradiction_scan(
     return None
 
 
+def _sources_payload(chunks: list[ChunkHit]) -> dict:
+    return {
+        "chunks": [
+            {"id": h.chunk.id, "doc": h.doc_title, "text": h.chunk.text[:400], "score": h.score} for h in chunks
+        ]
+    }
+
+
+def _history_messages(history: list[dict] | None) -> list[dict]:
+    """Normalize stored conversation turns into OpenAI-style messages (last 8)."""
+    out: list[dict] = []
+    for m in (history or [])[-8:]:
+        role = m.get("role")
+        content = m.get("content")
+        if role in ("user", "assistant") and isinstance(content, str) and content.strip():
+            out.append({"role": role, "content": content[:4000]})
+    return out
+
+
 async def ask_events(
     session: AsyncSession,
     gateway: LLMGateway,
     question: str,
     corpus: str | None = None,
     image: str | None = None,
+    history: list[dict] | None = None,
 ) -> AsyncIterator[tuple[str, dict]]:
     answer_id = str(uuid.uuid4())
+    use_agent = getattr(gateway, "supports_tools", False) and not image
 
-    hits, _rewritten = await retrieve_context(session, gateway, question, corpus)
-
+    # ── retrieval / initial sources ───────────────────────────────────────
     image_hits: list = []
+    hits: list[ChunkHit] = []
     if image:
         try:
             mime, image_bytes = parse_image_data_url(image)
@@ -140,42 +168,92 @@ async def ask_events(
             image_hits = await image_search(session, query_vec, corpus=corpus, top_k=3)
         except Exception as exc:  # noqa: BLE001
             logger.warning("image query failed: %s", exc)
+        sources = {"chunks": []}
+        if image_hits:
+            sources["images"] = [
+                {"id": h.image.id, "doc": h.doc_title, "caption": h.image.caption, "score": h.score}
+                for h in image_hits
+            ]
+        yield ("sources", sources)
+    elif use_agent:
+        # The agent drives retrieval via its tools — emit an empty placeholder now;
+        # the rich, final source list arrives with the answer.
+        yield ("sources", {"chunks": [], "agent": True})
+    else:
+        hits, _rewritten = await retrieve_context(session, gateway, question, corpus)
+        yield ("sources", _sources_payload(hits))
 
-    sources = {"chunks": [{"id": h.chunk.id, "doc": h.doc_title, "text": h.chunk.text[:400], "score": h.score} for h in hits]}
-    if image_hits:
-        sources["images"] = [
-            {"id": h.image.id, "doc": h.doc_title, "caption": h.image.caption, "score": h.score} for h in image_hits
-        ]
-    yield ("sources", sources)
-
-    image_captions = [{"doc": h.doc_title, "caption": h.image.caption or "", "tags": h.image.tags} for h in image_hits]
-    assembled = assemble_context(question, hits, image_captions=image_captions)
-    prompt_tokens = count_tokens(assembled.user_text)
-
+    # ── generation ────────────────────────────────────────────────────────
     out_tokens = 0
     text_parts: list[str] = []
-    try:
-        async for token in gateway.chat_stream("generation", assembled.messages):
-            out_tokens += len(token.split())  # stream chunks may contain several tokens
-            text_parts.append(token)
-            yield ("tokens", {"text": token})
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("generation failed: %s", exc)
-        text_parts.append(f"\n[generation failed: {exc}]")
-        yield ("tokens", {"text": f"\n[generation failed: {exc}]"})
+    agent_sources: list[dict] | None = None
+    assembled_citations: list[dict] = []
+
+    if use_agent:
+        usage_est: dict = {"in": 0}
+        try:
+            async for event, data in agent_events(session, gateway, question, corpus, history, usage=usage_est):
+                if event == "thinking":
+                    yield ("thinking", data)
+                elif event == "tokens":
+                    out_tokens += len(data["text"].split())
+                    text_parts.append(data["text"])
+                    yield ("tokens", data)
+                elif event == "agent_done":
+                    agent_sources = data["sources"]
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("agent failed: %s", exc)
+            text_parts.append(f"\n[agent error: {exc}]")
+            yield ("tokens", {"text": f"\n[agent error: {exc}]"})
+        if agent_sources is not None:
+            hits = [
+                ChunkHit(
+                    chunk=Chunk(id=s["chunk_id"], doc_id="", text=s["text"], chunk_index=0, tokens=0, embedding=None),
+                    score=float(s.get("score") or 0.0),
+                    doc_title=s["doc"],
+                )
+                for s in agent_sources
+            ]
+            yield ("sources", {"chunks": [{"id": s["chunk_id"], "doc": s["doc"], "text": s["text"][:400], "score": s.get("score")} for s in agent_sources]})
+        prompt_tokens = usage_est.get("in", 0)
+    else:
+        image_captions = [
+            {"doc": h.doc_title, "caption": h.image.caption or "", "tags": h.image.tags} for h in image_hits
+        ]
+        assembled = assemble_context(question, hits, image_captions=image_captions)
+        history_msgs = _history_messages(history)
+        messages = [assembled.messages[0], *history_msgs, assembled.messages[1]]
+        prompt_tokens = count_tokens(assembled.user_text)
+        try:
+            async for token in gateway.chat_stream("generation", messages):
+                out_tokens += len(token.split())  # stream chunks may contain several tokens
+                text_parts.append(token)
+                yield ("tokens", {"text": token})
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("generation failed: %s", exc)
+            text_parts.append(f"\n[generation failed: {exc}]")
+            yield ("tokens", {"text": f"\n[generation failed: {exc}]"})
 
     answer = "".join(text_parts)
     usage = {"in": prompt_tokens, "out": out_tokens}
 
-    # Grounding: keep only citations the answer actually references.
+    # ── citations (grounded) ──────────────────────────────────────────────
+    if agent_sources is not None:
+        assembled_citations = [
+            {"n": s["n"], "chunk_id": s["chunk_id"], "doc": s["doc"]} for s in agent_sources
+        ]
+    else:
+        assembled_citations = [{"n": n, "chunk_id": h.chunk.id, "doc": h.doc_title} for n, h in enumerate(hits, start=1)]
+
     emitted = parse_citations(answer)
     if emitted:
-        kept = [c for c in assembled.citations if c["n"] in emitted]
-        dropped = [c["n"] for c in assembled.citations if c["n"] not in emitted]
+        kept = [c for c in assembled_citations if c["n"] in emitted]
+        dropped = [c["n"] for c in assembled_citations if c["n"] not in emitted]
         yield ("citations", {"citations": kept, "dropped": dropped, "grounded": True})
     else:
-        yield ("citations", {"citations": assembled.citations, "grounded": False})
+        yield ("citations", {"citations": assembled_citations, "grounded": False})
 
+    # ── contradiction scan ────────────────────────────────────────────────
     alert = await contradiction_scan(gateway, hits)
     if alert:
         yield ("contradiction", alert)

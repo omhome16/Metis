@@ -12,13 +12,14 @@ from openai import AsyncOpenAI
 
 from app.core.config import Settings
 from app.core.logging import get_logger
-from app.gateway.base import ChatResult, LLMClient
+from app.gateway.base import ChatResult, LLMClient, ToolStreamChunk, parse_tool_call_deltas
 
 logger = get_logger(__name__)
 
 
 class GeminiProvider(LLMClient):
     name = "gemini"
+    supports_tools = True
 
     def __init__(self, settings: Settings):
         self._client = AsyncOpenAI(
@@ -74,6 +75,43 @@ class GeminiProvider(LLMClient):
         except json.JSONDecodeError:
             logger.warning("structured response was not valid JSON: %r", resp.choices[0].message.content[:200])
             return {}
+
+    async def chat_tools_stream(
+        self,
+        messages: list[dict],
+        model: str,
+        tools: list[dict],
+        temperature: float = 0.7,
+        max_tokens: int = 1024,
+    ) -> AsyncIterator[ToolStreamChunk]:
+        stream = await self._client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools or None,
+            stream=True,
+        )
+        fragments: list[dict] = []
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta.content:
+                yield ToolStreamChunk(text=delta.content)
+            for tc in delta.tool_calls or []:
+                fragments.append(
+                    {
+                        "index": tc.index,
+                        "id": tc.id or "",
+                        "name": (tc.function.name if tc.function else None) or "",
+                        "arguments": (tc.function.arguments if tc.function else None) or "",
+                    }
+                )
+        if fragments:
+            calls = parse_tool_call_deltas(fragments)
+            if calls:
+                yield ToolStreamChunk(tool_calls=calls)
 
     async def describe_image(self, image_b64: str, prompt: str, mime_type: str = "image/png") -> str:
         data_uri = f"data:{mime_type};base64,{image_b64}"

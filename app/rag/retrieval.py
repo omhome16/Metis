@@ -11,8 +11,9 @@ from app.db.models import Chunk, Document, ImageRecord
 @dataclass
 class ChunkHit:
     chunk: Chunk
-    score: float  # cosine similarity (1 − cosine distance)
+    score: float  # fusion / cosine similarity (1 − cosine distance)
     doc_title: str
+    rerank_score: float | None = None  # cross-encoder score, when reranked
 
 
 async def store_chunks(
