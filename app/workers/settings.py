@@ -9,8 +9,10 @@ from app.workers.ingest import process_ingest_job
 class WorkerSettings:
     functions = [process_ingest_job]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
-    max_jobs = 10
-    job_timeout = 600
+    # Large batches (big PDFs, long texts) embed on CPU for many minutes — never
+    # let arq's default 10-minute timeout kill a job mid-document.
+    max_jobs = 2
+    job_timeout = 3600
 
     async def on_shutdown(self, ctx):  # noqa: ANN001
         from app.graph.store import get_graph_store
