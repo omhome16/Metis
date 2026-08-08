@@ -39,6 +39,7 @@ async def test_ask_route_serves_cached_answer(client, require_redis):
     from sqlalchemy import delete, select
 
     from app.db.models import Chunk, Document
+    from app.db.session import async_session_factory
     from app.rag.embeddings import get_embedder
     from app.rag.retrieval import store_chunks
 
