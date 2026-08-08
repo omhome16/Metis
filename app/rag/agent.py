@@ -19,6 +19,8 @@ from app.core.logging import get_logger
 from app.gateway.base import ToolCall
 from app.gateway.gateway import LLMGateway
 from app.graph.store import get_graph_store
+from app.rag.chunking import count_tokens
+from app.rag.context import assemble_context
 from app.rag.embeddings import get_embedder
 from app.rag.rerank import get_reranker
 from app.rag.retrieval import ChunkHit, fetch_chunks_by_id, fuse_hybrid, keyword_search, vector_search
@@ -221,6 +223,47 @@ async def _wikipedia_suggest(client: httpx.AsyncClient, query: str) -> list[str]
     return []
 
 
+async def _direct_fallback(
+    session: AsyncSession,
+    gateway: LLMGateway,
+    question: str,
+    corpus: str | None,
+    history: list[dict] | None,
+    memory: AgentMemory,
+) -> str:
+    """Tool-calling is unavailable (rate limits, no key) — run direct retrieval.
+
+    Hybrid search + rerank need no LLM, so the user still gets real sources and
+    a grounded answer instead of an empty fallback. Generation goes through the
+    same provider chain; if every provider is down the caller keeps the canned
+    message but the sources are still emitted.
+    """
+    try:
+        embedder = get_embedder()
+        qv = await embedder.embed_query(question)
+        vh = await vector_search(session, qv, corpus=corpus, top_k=12)
+        kh = await keyword_search(session, question, corpus=corpus, top_k=12)
+        hits = fuse_hybrid(vh, kh, top_k=10)
+        hits = await get_reranker().rerank(question, hits, top_k=5)
+        memory.add(hits)
+        if not hits:
+            return ""
+        assembled = assemble_context(question, hits)
+        history_msgs = [
+            {"role": m["role"], "content": m["content"][:4000]}
+            for m in (history or [])[-6:]
+            if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str) and m["content"].strip()
+        ]
+        messages = [assembled.messages[0], *history_msgs, assembled.messages[1]]
+        parts: list[str] = []
+        async for token in gateway.chat_stream("generation", messages):
+            parts.append(token)
+        return "".join(parts).strip()
+    except Exception as exc:  # noqa: BLE001 — fallback must never crash the agent
+        logger.warning("direct fallback failed: %s", exc)
+        return ""
+
+
 async def _execute_tool(
     session: AsyncSession, corpus: str | None, call: ToolCall, memory: AgentMemory
 ) -> tuple[str, str]:
@@ -283,9 +326,9 @@ async def agent_events(
                     buf.append(chunk.text)
                 if chunk.tool_calls:
                     calls = chunk.tool_calls
-        except Exception as exc:  # noqa: BLE001 — tool-calling failed; give up the loop
+        except Exception as exc:  # noqa: BLE001 — tool-calling failed; fall back to direct retrieval
             logger.warning("agent step %d failed (%s) — falling back to direct answer", step, exc)
-            final_text = "".join(buf).strip()
+            final_text = await _direct_fallback(session, gateway, question, corpus, history, memory) or "".join(buf).strip()
             break
 
         if usage is not None:
@@ -308,10 +351,19 @@ async def agent_events(
             messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
 
     if not final_text:
-        final_text = (
-            "I searched the vault but could not assemble a confident answer from the "
-            "passages I found. Try rephrasing, or ask about something this vault covers."
-        )
+        if memory.sources():
+            # retrieval worked but no provider could generate — surface the evidence
+            final_text = (
+                "I retrieved relevant passages from the vault, but the language model is "
+                "temporarily unavailable, so I can't compose a full answer right now. "
+                "See the numbered sources below — the most relevant material is in the "
+                "first few passages."
+            )
+        else:
+            final_text = (
+                "I searched the vault but could not assemble a confident answer from the "
+                "passages I found. Try rephrasing, or ask about something this vault covers."
+            )
     for token in final_text.split(" "):
         yield ("tokens", {"text": token + " "})
     yield ("agent_done", {"answer": final_text, "sources": memory.sources()})

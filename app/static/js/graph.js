@@ -71,6 +71,8 @@ export class ForceGraph {
     this.byId = new Map(nodes.map((n) => [n.id, n]));
     this.selected = null;
     this.pinned.clear();
+    this.journey = new Set();
+    this.journeyEdges = new Set();
     this._seedPositions();
     this._warm = 140;
     this.fit(true);
@@ -94,12 +96,33 @@ export class ForceGraph {
       type: raw.type || label,
       degree,
       r,
+      color: raw.color || null, // per-node override (library vault coloring)
+      corpus: raw.corpus || null,
+      corpora: raw.corpora || [],
+      bridge: raw.corpora && raw.corpora.length > 1,
       x: 0,
       y: 0,
       vx: 0,
       vy: 0,
       fresh,
     };
+  }
+
+  /* ── journey highlight ─────────────────────────────────── */
+  setJourney(nodeIds) {
+    this.journey = new Set(nodeIds || []);
+    this.journeyEdges = new Set();
+    const ids = this.journey;
+    for (const e of this.edges) {
+      if (ids.has(e.source) && ids.has(e.target)) this.journeyEdges.add(`${e.source}|${e.target}`);
+    }
+    this.draw();
+  }
+
+  clearJourney() {
+    this.journey = new Set();
+    this.journeyEdges = new Set();
+    this.draw();
   }
 
   /** Incremental expansion: merge new nodes/edges, animate pop-in. */
@@ -296,20 +319,40 @@ export class ForceGraph {
     ctx.translate(view.x, view.y);
     ctx.scale(view.scale, view.scale);
 
+    const journeyKey = (e) => `${e.source}|${e.target}`;
     // edges
     for (const e of this.edges) {
       const a = this.byId.get(e.source);
       const b = this.byId.get(e.target);
       if (!a || !b) continue;
-      const active = highlight && (e.source === highlight || e.target === highlight);
+      const onJourney = this.journey && this.journey.has(e.source) && this.journey.has(e.target);
+      const active = (highlight && (e.source === highlight || e.target === highlight)) || onJourney;
       const dim = highlight && !active;
       ctx.globalAlpha = dim ? 0.12 : 0.28 + Math.min(e.weight || 1, 4) * 0.14;
+      if (onJourney) {
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = this._theme.accent;
+        ctx.lineWidth = 2.6;
+        ctx.setLineDash([5, 3]);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 0.22;
+        ctx.lineWidth = 6;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        continue;
+      }
       ctx.strokeStyle = e.kind === "RELATED" ? this._theme.faint : this._theme.faintest;
       ctx.lineWidth = e.kind === "RELATED" ? 1 + Math.min(e.weight || 1, 4) * 0.35 : 0.8;
+      if (e.cross) ctx.setLineDash([3, 4]);
       ctx.beginPath();
       ctx.moveTo(a.x, a.y);
       ctx.lineTo(b.x, b.y);
       ctx.stroke();
+      ctx.setLineDash([]);
       if (active && this.hoverEdge && this.hoverEdge.source === e.source && this.hoverEdge.target === e.target) {
         ctx.globalAlpha = 1;
         ctx.strokeStyle = this._theme.accent;
@@ -333,28 +376,38 @@ export class ForceGraph {
   _drawNode(n, isHighlight) {
     const ctx = this.ctx;
     const t = this._theme;
-    let color = t.entity;
-    if (n.label === "Document") color = t.doc;
-    else if (n.label === "Image") color = t.image;
+    let color = n.color || t.entity;
+    if (!n.color) {
+      if (n.label === "Document") color = t.doc;
+      else if (n.label === "Image") color = t.image;
+    }
 
+    const onJourney = this.journey && this.journey.has(n.id);
     const growing = n.fresh;
     const r = growing ? n.r * 0.35 : n.r;
 
     ctx.save();
-    if (isHighlight || n.id === this.selected) {
-      ctx.shadowColor = t.glow;
-      ctx.shadowBlur = 18;
+    if (isHighlight || n.id === this.selected || onJourney) {
+      ctx.shadowColor = onJourney ? t.accent : t.glow;
+      ctx.shadowBlur = onJourney ? 22 : 18;
     }
     ctx.fillStyle = color;
-    ctx.strokeStyle = t.ring;
-    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = onJourney ? t.accent : t.ring;
+    ctx.lineWidth = onJourney ? 2.4 : 1.2;
 
     if (n.label === "Entity") {
       ctx.beginPath();
       ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
-      if (isHighlight || n.id === this.selected) {
+      // bridge: multi-vault entity gets an inner dot marker
+      if (n.bridge) {
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, 2, 0, Math.PI * 2);
+        ctx.fillStyle = t.ring;
+        ctx.fill();
+      }
+      if (isHighlight || n.id === this.selected || onJourney) {
         ctx.beginPath();
         ctx.arc(n.x, n.y, r + 4, 0, Math.PI * 2);
         ctx.strokeStyle = color;

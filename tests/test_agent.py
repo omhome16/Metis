@@ -106,6 +106,37 @@ async def test_agent_loop_thinks_then_answers(client, require_db):
         await _cleanup(corpus)
 
 
+async def test_tool_stream_failure_still_grounds_answer(client, require_db):
+    """When tool-calling fails mid-flight (rate limit), the agent must fall back to
+    direct retrieval so the user still gets real sources, not an empty answer."""
+
+    class BrokenTools:
+        supports_tools = True
+
+        async def chat_stream(self, task, messages, temperature=0.7, max_tokens=None):
+            # direct-generation fallback path
+            yield "The Art of War was written by Sun Tzu [1]. "
+
+        async def chat_tools_stream(self, task, messages, tools, temperature=0.7, max_tokens=None):
+            raise RuntimeError("tool-calling unavailable (rate limited)")
+
+    corpus = f"test-toolfail-{uuid.uuid4().hex[:8]}"
+    await _seed(corpus)
+    try:
+        with patch("app.api.routes.ask.get_gateway", return_value=BrokenTools()):
+            resp = await client.post("/api/v1/ask", json={"question": "Who wrote The Art of War?", "corpus": corpus})
+        assert resp.status_code == 200
+        events = _parse_sse(resp.text)
+        answer = "".join(d["text"] for e, d in events if e == "tokens")
+        assert "Sun Tzu" in answer, f"direct fallback should still answer from retrieved context: {answer!r}"
+        sources = [d for e, d in events if e == "sources"]
+        assert sources and sources[-1]["chunks"], "fallback must emit real retrieved sources"
+        citations = dict(events)["citations"]["citations"]
+        assert citations, "fallback sources should still be citable"
+    finally:
+        await _cleanup(corpus)
+
+
 async def test_no_tool_support_falls_back(client, require_db):
     """A gateway without tools must still produce a full event sequence (direct path)."""
 

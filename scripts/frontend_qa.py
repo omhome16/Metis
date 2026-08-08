@@ -102,6 +102,47 @@ def main():
         print(f"[ok] conversation persisted + listed ({n_conv} in panel)")
         shot(page, "04-ask")
 
+        # 4b. library graph
+        page.locator(".vault-item", has_text="Library graph").click()
+        page.wait_for_timeout(5000)
+        canvas = page.locator(".graph-stage canvas")
+        assert canvas.count() == 1, "library graph canvas missing"
+        print("[ok] library graph canvas present")
+        # vault filter chips + journey bar should be present
+        filters = page.locator(".vault-chips .chip").count()
+        assert filters >= 2, f"expected >=2 library vault filters, got {filters}"
+        assert page.locator(".journey-bar").count() == 1, "journey bar missing"
+        print(f"[ok] library graph filters: {filters}, journey bar present")
+        shot(page, "03b-library-graph")
+
+        # 4c. surprises
+        page.locator(".vault-item", has_text="Surprises").click()
+        page.wait_for_selector(".surprise-card", timeout=30000)
+        n_cards = page.locator(".surprise-card").count()
+        assert n_cards >= 1, "no surprise cards"
+        print(f"[ok] surprises: {n_cards} card(s)")
+        shot(page, "03c-surprises")
+
+        # 4d. journey — back to library graph, pick two entities, run it
+        page.locator(".vault-item", has_text="Library graph").click()
+        page.wait_for_timeout(4000)
+        f1 = page.locator(".journey-bar .entity-field input").first
+        f1.fill("Aristotle")
+        page.wait_for_timeout(600)
+        page.locator(".entity-suggest .es-item", has_text="Aristotle").first.click()
+        page.wait_for_timeout(400)
+        f2 = page.locator(".journey-bar .entity-field input").nth(1)
+        f2.fill("United States")
+        page.wait_for_timeout(600)
+        page.locator(".entity-suggest .es-item", has_text="United States").first.click()
+        page.wait_for_timeout(400)
+        page.locator(".journey-bar .btn-primary").click()
+        page.wait_for_selector(".journey-narrative:not(.hidden)", timeout=30000)
+        narr = page.locator(".journey-narrative").inner_text()
+        assert len(narr) > 20, f"journey narrative too short: {narr[:60]!r}"
+        print(f"[ok] journey narrative: {narr[:70]!r}".encode("ascii", "replace").decode())
+        shot(page, "03d-journey")
+
         # 5. dark theme
         page.locator("#themeToggle").click()
         page.wait_for_timeout(700)

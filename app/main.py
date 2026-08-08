@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 mimetypes.add_type("font/woff2", ".woff2")
 mimetypes.add_type("font/woff", ".woff")
 
-from app.api.routes import ask, cache, conversations, corpora, evals, graph, health, ingest, search, vaults
+from app.api.routes import ask, cache, conversations, corpora, evals, graph, health, ingest, library, search, vaults
 from app.core.config import settings
 from app.core.errors import register_exception_handlers
 from app.core.limits import RateLimiter, RateLimitMiddleware
@@ -67,6 +67,7 @@ app.include_router(evals.router, prefix=settings.api_prefix)
 app.include_router(cache.router, prefix=settings.api_prefix)
 app.include_router(vaults.router, prefix=settings.api_prefix)
 app.include_router(conversations.router, prefix=settings.api_prefix)
+app.include_router(library.router, prefix=settings.api_prefix)
 
 # Static frontend (SPA) — API routes above always win; unknown API paths 404.
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

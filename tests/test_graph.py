@@ -36,20 +36,24 @@ async def test_schema_and_upsert(require_graph):
 
 async def test_neighbor_chunk_ids(require_graph):
     store = require_graph
+    # unique entity names keep the seeded graph isolated from live data (the
+    # live graph now has real "Gandhi" nodes that would saturate LIMIT 10)
+    ent_a = _uniq("Ea")
+    ent_b = _uniq("Eb")
     chunk_a = _uniq("ca")
     chunk_b = _uniq("cb")
     await store.upsert_document_graph(
         doc_id=_uniq("doc"),
         title="t",
         corpus="test-graph",
-        chunks=[(chunk_a, "Gandhi marched to the sea.", 0), (chunk_b, "Nehru wrote about Gandhi.", 1)],
-        entities=[{"name": "Gandhi", "type": "Person"}, {"name": "Nehru", "type": "Person"}],
+        chunks=[(chunk_a, f"{ent_a} marched to the sea.", 0), (chunk_b, f"{ent_b} wrote about {ent_a}.", 1)],
+        entities=[{"name": ent_a, "type": "Person"}, {"name": ent_b, "type": "Person"}],
         relations=[],
     )
-    ids = await store.neighbor_chunk_ids(["Gandhi"], max_hops=1, limit=10)
+    ids = await store.neighbor_chunk_ids([ent_a], max_hops=1, limit=10)
     assert chunk_a in ids  # direct mention
-    ids_2hop = await store.neighbor_chunk_ids(["Gandhi"], max_hops=2, limit=10)
-    assert chunk_b in ids_2hop  # via Gandhi→Nehru RELATED_TO (co-occurrence) → chunk_b
+    ids_2hop = await store.neighbor_chunk_ids([ent_a], max_hops=2, limit=10)
+    assert chunk_b in ids_2hop  # via ent_a→ent_b RELATED_TO (co-occurrence) → chunk_b
     assert await store.neighbor_chunk_ids([], max_hops=1) == []
 
 

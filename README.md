@@ -49,6 +49,16 @@ vanilla ES modules + CSS custom properties).
 - **Conversations** — every exchange is persisted server-side per vault (migration
   0005). Follow-ups carry full history back into the agent loop; the Ask view lists,
   switches, renames, and deletes past conversations.
+- **Library** — the whole library as one graph (`/library` API): every vault rendered on
+  a single canvas with vault-colored clusters and dashed cross-vault edges, live vault
+  filters, and a **Surprises** tab that mines the graph for connections between vaults
+  (shared concepts + cross-vault links) narrated in one LLM call.
+- **Idea journeys** — pick any two entities (search-as-you-type pickers) and Metis finds
+  the shortest path between them across all vaults, highlights it on the graph, and
+  narrates the journey as a short story.
+- **Resilience** — when the LLM providers are rate-limited, the agent falls back to
+  direct hybrid retrieval → context assembly → generation, so answers stay grounded in
+  real vault sources instead of degrading to an empty reply.
 - **Themes** — "Reading Room" (light) and "Night Archive" (dark), system-aware,
   persisted, with a live-recolored graph. Typefaces (Spectral / Inter / IBM Plex Mono)
   are self-hosted.
@@ -77,6 +87,10 @@ uv run python scripts/frontend_qa.py
 | `/graph/connections` | GET | Path between two entities |
 | `/graph/stats` | GET | Node/edge counts, top entities by PageRank |
 | `/cache/stats` | GET | Semantic cache hit rate |
+| `/library/graph` | GET | Cross-vault library graph (corpus-tagged nodes, bridge flags) |
+| `/library/surprises` | GET | Mined cross-vault connections with LLM narratives |
+| `/library/journey` | GET | Shortest entity path across vaults + narrated story |
+| `/library/entities` | GET | Entity search for the journey pickers |
 | `/evals/run` | POST | Run the eval harness |
 | `/evals/reports` | GET | Past eval runs + metrics |
 

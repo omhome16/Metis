@@ -11,11 +11,21 @@ export function parseHash() {
       tab: ["documents", "graph", "ask"].includes(parts[2]) ? parts[2] : "documents",
     };
   }
+  if (parts[0] === "library") {
+    return {
+      name: "library",
+      tab: ["graph", "surprises"].includes(parts[1]) ? parts[1] : "graph",
+    };
+  }
   return { name: "home" };
 }
 
 export function vaultPath(name, tab = "documents") {
   return `#/v/${encodeURIComponent(name)}/${tab}`;
+}
+
+export function libraryPath(tab = "graph") {
+  return `#/library/${tab}`;
 }
 
 export function homePath() {

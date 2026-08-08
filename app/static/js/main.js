@@ -8,6 +8,7 @@ import { renderHome } from "./views/home.js";
 import { renderDocuments } from "./views/documents.js";
 import { renderGraph } from "./views/graphview.js";
 import { renderAsk } from "./views/ask.js";
+import { renderLibrary } from "./views/library.js";
 
 async function boot() {
   initTheme();
@@ -37,6 +38,11 @@ async function boot() {
 
     if (route.name === "home") {
       await renderHome(view);
+      return;
+    }
+
+    if (route.name === "library") {
+      await renderLibrary(view, route.tab);
       return;
     }
 
@@ -87,6 +93,12 @@ function paintTopbar(route) {
   ctx.innerHTML = "";
   if (route.name === "home") {
     ctx.append(crumb("Overview", true));
+  } else if (route.name === "library") {
+    ctx.append(
+      crumb("Library", false, () => { location.hash = "#/"; }),
+      elSep(),
+      crumb(route.tab === "surprises" ? "Surprises" : "Graph", true)
+    );
   } else {
     ctx.append(
       crumb(route.vault, false, () => { location.hash = "#/"; }),

@@ -1463,6 +1463,361 @@
   max-width: 380px;
 }
 
+/* ── Library (cross-vault) ───────────────────────────────── */
+
+.rail-head-vaults {
+  margin-top: 8px;
+}
+.vault-swatch.lib {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  box-shadow: none;
+}
+.vault-swatch.lib svg {
+  width: 11px;
+  height: 11px;
+}
+.vault-item.active .vault-swatch.lib {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.vault-item.library-item .vault-count {
+  display: none;
+}
+
+.swatch.lib {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+.swatch.lib svg {
+  width: 10px;
+  height: 10px;
+}
+
+/* journey bar */
+.journey-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-md);
+  background: var(--bg-elev);
+  margin-bottom: 12px;
+}
+.journey-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-right: 4px;
+}
+.journey-label svg {
+  width: 14px;
+  height: 14px;
+  color: var(--accent);
+}
+.journey-arrow {
+  color: var(--ink-faintest);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.entity-field {
+  position: relative;
+  flex: 1;
+  min-width: 150px;
+  max-width: 250px;
+}
+.entity-field input {
+  width: 100%;
+  padding: 7px 11px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.entity-field input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.entity-suggest {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  background: var(--bg-elev);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-2);
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+}
+.es-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 9px;
+  border-radius: var(--r-xs);
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  transition: background var(--dur) var(--ease);
+}
+.es-item:hover {
+  background: var(--bg-hover);
+  color: var(--ink);
+}
+
+/* vault filter chips */
+.vault-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-pill);
+  background: var(--bg-elev);
+  color: var(--ink-faint);
+  font-size: 11.5px;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.chip:hover {
+  border-color: var(--hairline-strong);
+  color: var(--ink);
+}
+.chip.active {
+  border-color: color-mix(in srgb, var(--chip, var(--accent)) 45%, transparent);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--chip, var(--accent)) 10%, var(--bg-elev));
+}
+.chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--chip, var(--accent));
+  flex: none;
+}
+.chip.chip-all .chip-dot {
+  background: var(--ink-faint);
+}
+.chip.chip-all.active {
+  --chip: var(--ink-soft);
+}
+.chip-mini {
+  padding: 3px 9px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.chip-mini .chip-dot {
+  width: 6px;
+  height: 6px;
+}
+
+/* library legend */
+.lib-legend {
+  flex-wrap: wrap;
+  gap: 10px;
+  max-width: 480px;
+}
+.legend-dash {
+  width: 16px;
+  height: 0;
+  border-top: 2px dashed var(--ink-faint);
+}
+.legend-dash.accent {
+  border-top-style: dashed;
+  border-top-color: var(--accent);
+}
+.legend-dot.bridge-dot {
+  position: relative;
+}
+.legend-dot.bridge-dot::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: var(--bg-elev);
+}
+
+/* journey narrative */
+.journey-narrative {
+  margin-top: 14px;
+  padding: 16px 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--accent-soft) 45%, var(--bg-elev));
+  animation: rise-in 260ms var(--ease);
+}
+.jn-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.jn-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.jn-chain {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0;
+}
+.jn-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.jn-name {
+  font-family: var(--font-display);
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.jn-vault {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--chip);
+  border: 1px solid color-mix(in srgb, var(--chip) 40%, transparent);
+  border-radius: var(--r-pill);
+  padding: 1px 6px;
+}
+.jn-arrow {
+  display: inline-flex;
+  color: var(--accent);
+}
+.jn-arrow svg {
+  width: 13px;
+  height: 13px;
+}
+.jn-story {
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--ink-soft);
+}
+
+/* surprises */
+.surprise-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+}
+.surprise-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 17px;
+  background: var(--bg-elev);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.surprise-card:hover {
+  border-color: var(--hairline-strong);
+  box-shadow: var(--shadow-1);
+  transform: translateY(-1px);
+}
+.surprise-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.surprise-kind {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  padding: 3px 9px;
+  border-radius: var(--r-pill);
+}
+.surprise-metric {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--ink-faintest);
+}
+.surprise-entities {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.se-name {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.se-type {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-faint);
+  border: 1px solid var(--hairline);
+  padding: 2px 7px;
+  border-radius: var(--r-pill);
+}
+.se-link {
+  display: inline-flex;
+  color: var(--accent);
+}
+.se-link svg {
+  width: 14px;
+  height: 14px;
+}
+.surprise-vaults {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.surprise-insight {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink-soft);
+  flex: 1;
+}
+.surprise-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 /* ── Toasts ───────────────────────────────────────────────── */
 
 #toast-root {

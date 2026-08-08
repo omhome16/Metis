@@ -2,13 +2,19 @@ import { el, clear } from "../util.js";
 import { icon } from "../icons.js";
 import { api } from "../api.js";
 import { state } from "../store.js";
-import { vaultPath } from "../router.js";
+import { vaultPath, libraryPath } from "../router.js";
 import { openModal, closeModal } from "./modal.js";
 import { toast } from "./toast.js";
 
 const SWATCHES = ["#2E6B4E", "#B0613A", "#3B5A79", "#7A5C8C", "#96691F", "#5E6B4E"];
 
+const LIBRARY_ITEMS = [
+  { id: "graph", label: "Library graph", icon: "network" },
+  { id: "surprises", label: "Surprises", icon: "sparkle" },
+];
+
 export function renderSidebar() {
+  renderLibraryNav();
   const list = document.getElementById("vaultList");
   clear(list);
   const route = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
@@ -28,6 +34,26 @@ export function renderSidebar() {
       location.hash = vaultPath(v.name, active ? currentTab(v.name) : "documents");
     });
     list.append(item);
+  }
+}
+
+function renderLibraryNav() {
+  const list = document.getElementById("libraryList");
+  if (!list) return;
+  clear(list);
+  const route = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+  const activeTab = route[0] === "library" ? route[1] : null;
+  for (const item of LIBRARY_ITEMS) {
+    const btn = el("button", {
+      class: `vault-item library-item${activeTab === item.id ? " active" : ""}`,
+      "data-name": item.label,
+    });
+    btn.append(
+      el("span", { class: "vault-swatch lib", html: icon(item.icon, 12) }),
+      el("span", { class: "vault-name", text: item.label })
+    );
+    btn.addEventListener("click", () => { location.hash = libraryPath(item.id); });
+    list.append(btn);
   }
 }
 

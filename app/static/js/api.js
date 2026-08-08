@@ -39,6 +39,11 @@ export const api = {
   graphExplore: (entity, depth = 1, limit = 40) =>
     request("GET", `/api/v1/graph/explore?entity=${enc(entity)}&depth=${depth}&limit=${limit}`),
 
+  libraryGraph: () => request("GET", "/api/v1/library/graph"),
+  libraryEntities: (q, limit = 12) => request("GET", `/api/v1/library/entities?q=${enc(q)}&limit=${limit}`),
+  librarySurprises: () => request("GET", "/api/v1/library/surprises"),
+  libraryJourney: (from, to) => request("GET", `/api/v1/library/journey?from=${enc(from)}&to=${enc(to)}`),
+
   doc: (id) => request("GET", `/api/v1/documents/${id}`),
   docContent: (id) => request("GET", `/api/v1/documents/${id}/content`),
   docChunks: (id) => request("GET", `/api/v1/documents/${id}/chunks`),
