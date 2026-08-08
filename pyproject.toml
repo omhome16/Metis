@@ -1,0 +1,73 @@
+[project]
+name = "metis"
+version = "0.1.0"
+description = "Metis — the self-organizing knowledge library: RAG + knowledge graph + contradiction detection + eval harness"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    # Web / API
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sse-starlette>=2.1",
+    "python-multipart>=0.0.12",
+    # Data / validation
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    # Database
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "pgvector>=0.3.6",
+    # Cache / queue
+    "redis>=5.2",
+    "arq>=0.26",
+    # Graph
+    "neo4j>=5.26",
+    # LLM gateway
+    "httpx>=0.27",
+    "openai>=1.51",
+    "google-genai>=1.0",
+    # ML / embeddings (local, free)
+    "torch>=2.4",
+    "torchvision>=0.19",
+    "sentence-transformers>=3.3",
+    "numpy>=2.1",
+    # Ingestion
+    "pypdf>=5.1",
+    # Observability
+    "langfuse>=2.45",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "respx>=0.22",
+    "ruff>=0.7",
+]
+
+# CPU-only torch from the official PyTorch index (avoids multi-GB CUDA wheels).
+# Remove these overrides if you need CUDA support on this machine.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_test_loop_scope = "session"
+asyncio_default_fixture_loop_scope = "session"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

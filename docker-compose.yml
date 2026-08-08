@@ -1,0 +1,85 @@
+# METIS local infrastructure. Dev workflow: `docker compose up -d db cache graph`
+# then run the API/worker locally with `uv run uvicorn app.main:app --reload`.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: metis-db
+    environment:
+      POSTGRES_USER: metis
+      POSTGRES_PASSWORD: metis
+      POSTGRES_DB: metis
+    # 5433 on host: avoids clashing with any locally installed Postgres on 5432.
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metis -d metis"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  cache:
+    image: redis:7.4-alpine
+    container_name: metis-cache
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  graph:
+    image: neo4j:5.26-community
+    container_name: metis-graph
+    environment:
+      NEO4J_AUTH: neo4j/metis-dev-password
+      NEO4J_PLUGINS: '["graph-data-science"]'
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 256m
+    ports:
+      - "7474:7474"   # browser
+      - "7687:7687"   # bolt
+    volumes:
+      - graphdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build: .
+    container_name: metis-api
+    env_file: .env
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+      graph:
+        condition: service_healthy
+
+  worker:
+    build: .
+    container_name: metis-worker
+    env_file: .env
+    command: arq app.workers.settings.WorkerSettings
+    depends_on:
+      db:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+      graph:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:
+  graphdata:
