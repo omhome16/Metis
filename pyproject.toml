@@ -30,12 +30,13 @@ dependencies = [
     # ML / embeddings (local, free)
     "torch>=2.4",
     "torchvision>=0.19",
-    "sentence-transformers>=3.3",
+    "sentence-transformers<5",
     "numpy>=2.1",
     # Ingestion
     "pypdf>=5.1",
     # Observability
     "langfuse>=2.45",
+    "transformers<5",
 ]
 
 [dependency-groups]

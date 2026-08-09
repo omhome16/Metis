@@ -4,8 +4,10 @@
 > knowledge graph of everything inside, answers questions with citations, surfaces
 > cross-document connections you didn't know existed, and flags contradictions between sources.
 
-See **[metis-blueprint.md](metis-blueprint.md)** for the full product design and
-**[docs/implementation-plan.md](docs/implementation-plan.md)** for the phased build plan.
+See **[metis-blueprint.md](metis-blueprint.md)** for the full product design,
+**[docs/implementation-plan.md](docs/implementation-plan.md)** for the phased
+build plan, and **[docs/architecture.md](docs/architecture.md)** for how the
+system is wired together.
 
 ## Stack
 
@@ -99,3 +101,38 @@ uv run python scripts/frontend_qa.py
 ```bash
 uv run pytest
 ```
+
+## Measured results
+
+The eval harness (`/evals/run`, `scripts/run_matrix.py`) scores the retrieval pipeline
+against golden datasets with RAGAS-style LLM-judged metrics. Numbers below are from
+real runs (Groq `llama-3.3-70b` generation + Gemini Flash judges, local CPU embeddings),
+single pass per config.
+
+### tech (`fastapi-notes` corpus, 4 questions)
+
+| Config | Faithfulness | Answer relevancy | Context precision | Context recall | Citations | p50 latency | Cost |
+|---|---|---|---|---|---|---|---|
+| hybrid + rerank + graph | **1.000** | 0.822 | **0.875** | **1.000** | 1.000 | 2.19s | $0.0008 |
+| hybrid only | **1.000** | **0.878** | 0.750 | **1.000** | 1.000 | 0.77s | $0.0008 |
+| rerank only (no graph) | **1.000** | 0.860 | **0.875** | **1.000** | 1.000 | 1.11s | $0.0008 |
+
+### Philosophy (10-document corpus, 5 questions)
+
+| Config | Faithfulness | Answer relevancy | Context precision | Context recall | Citations | p50 latency | Cost |
+|---|---|---|---|---|---|---|---|
+| hybrid + rerank + graph | 0.200 | 0.615 | 0.848 | 0.800 | 1.000 | 20.3s | $0.0025 |
+
+Notes:
+
+- **Faithfulness** is claim-level and strict: a verbose answer with one unsourced
+  sentence scores low. The Philosophy run's 0.200 reflects the model adding
+  background reasoning beyond the retrieved chunk (e.g. Kant) — retrieval itself
+  stayed recall-perfect at 0.800 with 1.000 citation correctness.
+- Metrics are LLM-judged, so expect ±0.05–0.1 variance between runs; latency
+  includes CPU embedding + generation.
+- Corpus sizes differ heavily: `tech` = 1 doc / 3 chunks, `Philosophy` = 10 texts /
+  6,754 chunks — the ~20x latency gap is mostly retrieval over the big corpus.
+
+Reproduce with `uv run python -m scripts.run_matrix tech` (or `Philosophy`).
+`eval_runs` are persisted and browsable at `/evals/reports`.
