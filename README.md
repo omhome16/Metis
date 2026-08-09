@@ -4,11 +4,6 @@
 > knowledge graph of everything inside, answers questions with citations, surfaces
 > cross-document connections you didn't know existed, and flags contradictions between sources.
 
-See **[metis-blueprint.md](metis-blueprint.md)** for the full product design,
-**[docs/implementation-plan.md](docs/implementation-plan.md)** for the phased
-build plan, and **[docs/architecture.md](docs/architecture.md)** for how the
-system is wired together.
-
 ## Stack
 
 FastAPI (async) · Postgres + pgvector · Neo4j · Redis · sentence-transformers (bge-m3, CLIP,
