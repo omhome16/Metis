@@ -106,17 +106,17 @@ single pass per config.
 
 ### tech (`fastapi-notes` corpus, 4 questions)
 
-| Config | Faithfulness | Answer relevancy | Context precision | Context recall | Citations | p50 latency | Cost |
+| Config | Faithfulness | Answer relevancy | Context precision | Context recall | Citations | p50 latency |
 |---|---|---|---|---|---|---|---|
-| hybrid + rerank + graph | **1.000** | 0.822 | **0.875** | **1.000** | 1.000 | 2.19s | $0.0008 |
-| hybrid only | **1.000** | **0.878** | 0.750 | **1.000** | 1.000 | 0.77s | $0.0008 |
-| rerank only (no graph) | **1.000** | 0.860 | **0.875** | **1.000** | 1.000 | 1.11s | $0.0008 |
+| hybrid + rerank + graph | **1.000** | 0.822 | **0.875** | **1.000** | 1.000 | 2.19s |
+| hybrid only | **1.000** | **0.878** | 0.750 | **1.000** | 1.000 | 0.77s |
+| rerank only (no graph) | **1.000** | 0.860 | **0.875** | **1.000** | 1.000 | 1.11s |
 
 ### Philosophy (10-document corpus, 5 questions)
 
-| Config | Faithfulness | Answer relevancy | Context precision | Context recall | Citations | p50 latency | Cost |
+| Config | Faithfulness | Answer relevancy | Context precision | Context recall | Citations | p50 latency |
 |---|---|---|---|---|---|---|---|
-| hybrid + rerank + graph | 0.200 | 0.615 | 0.848 | 0.800 | 1.000 | 20.3s | $0.0025 |
+| hybrid + rerank + graph | 0.200 | 0.615 | 0.848 | 0.800 | 1.000 | 20.3s |
 
 Notes:
 
