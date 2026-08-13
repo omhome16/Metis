@@ -4,12 +4,18 @@ Real: local cross-encoder `BAAI/bge-reranker-base` (free/offline). Mock: token-o
 scoring so tests and no-download dev stay deterministic.
 """
 
-import asyncio
+import os
 
-from sentence_transformers import CrossEncoder
+# Windows oneDNN/OMP threads crash fresh processes (0xC0000005) when loading
+# bge-reranker weights. Pin threads BEFORE sentence-transformers/torch import.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 
-from app.core.config import Settings, get_settings
-from app.rag.retrieval import ChunkHit
+import asyncio  # noqa: E402
+
+from sentence_transformers import CrossEncoder  # noqa: E402
+
+from app.core.config import Settings, get_settings  # noqa: E402
+from app.rag.retrieval import ChunkHit  # noqa: E402
 
 
 class Reranker:
@@ -19,6 +25,9 @@ class Reranker:
 
     def _load(self) -> CrossEncoder:
         if self._model is None:
+            import torch
+
+            torch.set_num_threads(1)  # Windows oneDNN pool segfaults (0xC0000005) intermittently
             self._model = CrossEncoder(self.model_name)
         return self._model
 

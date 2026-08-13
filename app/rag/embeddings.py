@@ -6,14 +6,20 @@ threads so the event loop never blocks. `...=mock` yields deterministic vectors
 for tests / no-download dev.
 """
 
-import asyncio
 import hashlib
 import io
+import os
 
-from PIL import Image
-from sentence_transformers import SentenceTransformer
+# Windows oneDNN/OMP threads crash fresh processes (0xC0000005) when loading
+# bge-m3/reranker weights. Pin threads BEFORE sentence-transformers/torch import.
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 
-from app.core.config import Settings, get_settings
+import asyncio  # noqa: E402
+
+from PIL import Image  # noqa: E402
+from sentence_transformers import SentenceTransformer  # noqa: E402
+
+from app.core.config import Settings, get_settings  # noqa: E402
 
 
 class Embedder:
@@ -23,6 +29,9 @@ class Embedder:
 
     def _load(self) -> SentenceTransformer:
         if self._model is None:
+            import torch
+
+            torch.set_num_threads(1)  # Windows oneDNN pool segfaults (0xC0000005) intermittently
             self._model = SentenceTransformer(self.model_name)
         return self._model
 
@@ -82,6 +91,9 @@ class ImageEmbedder:
 
     def _load(self) -> SentenceTransformer:
         if self._model is None:
+            import torch
+
+            torch.set_num_threads(1)  # Windows oneDNN pool segfaults (0xC0000005) intermittently
             self._model = SentenceTransformer(self.model_name)
         return self._model
 

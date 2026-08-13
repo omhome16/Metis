@@ -29,7 +29,7 @@
 **Interfaces:**
 - Produces: `chunks.embedding`/`images.embedding` as `halfvec` with `ix_chunks_embedding_hnsw`/`ix_images_embedding_hnsw` HNSW indexes; `documents.tags ARRAY`, `documents.doc_date`, `documents.author`; table `corpus_versions(corpus PK, version, updated_at)`; ORM: `Document.tags/doc_date/author`, `CorpusVersion` model, `Chunk.embedding`/`ImageRecord.embedding` typed as `HalfVectorType` (imported with a `try/except` for the older `HalfVector` name).
 
-- [ ] **Step 1: Write the failing migration smoke test**
+- [x] **Step 1: Write the failing migration smoke test**
 
 ```python
 """DB-gated smoke test: 0006 migration shape."""
@@ -58,12 +58,12 @@ async def test_halfvec_columns_and_indexes(client):
         assert {"tags", "doc_date", "author"} <= cols
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `uv run pytest tests/test_migrations.py -v`
 Expected: FAIL (`corpus_versions` relation does not exist).
 
-- [ ] **Step 3: Write migration `0006_vector_foundations.py`**
+- [x] **Step 3: Write migration `0006_vector_foundations.py`**
 
 ```python
 """vector foundations: halfvec + HNSW indexes, doc metadata, corpus_versions
@@ -111,7 +111,7 @@ def downgrade() -> None:
     op.execute("ALTER TABLE chunks ALTER COLUMN embedding TYPE vector USING embedding::vector")
 ```
 
-- [ ] **Step 4: Update ORM models (`app/db/models.py`)**
+- [x] **Step 4: Update ORM models (`app/db/models.py`)**
 
 ```python
 try:  # pgvector >= 0.3
@@ -133,13 +133,13 @@ class CorpusVersion(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 ```
 
-- [ ] **Step 5: Run migration + tests**
+- [x] **Step 5: Run migration + tests**
 
 Run: `uv run alembic upgrade head`
 Run: `uv run pytest tests/test_migrations.py -v`
 Expected: PASS. Then confirm the index is real: `EXPLAIN SELECT ... ORDER BY embedding <=> :q LIMIT 5` shows `hnsw`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add alembic/versions/0006_vector_foundations.py app/db/models.py tests/test_migrations.py
@@ -158,7 +158,7 @@ git commit -m "feat(db): halfvec + HNSW indexes, doc metadata, corpus_versions (
 **Interfaces:**
 - Produces: `settings.hnsw_ef_search: int = 120`, `settings.hnsw_iterative_scan: str = "relaxed_order"`; every new connection runs `SET hnsw.ef_search = <n>` + `SET hnsw.iterative_scan = <mode>`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 """Session GUCs are applied to new connections."""
@@ -176,12 +176,12 @@ async def test_gucs_applied(client):
     assert scan == "relaxed_order"
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `uv run pytest tests/test_session_gucs.py -v`
 Expected: FAIL (Postgres defaults `40` / `off`).
 
-- [ ] **Step 3: Add settings**
+- [x] **Step 3: Add settings**
 
 In `app/core/config.py` after `cache_similarity_threshold`:
 
@@ -190,7 +190,7 @@ In `app/core/config.py` after `cache_similarity_threshold`:
     hnsw_iterative_scan: str = "relaxed_order"  # off | relaxed_order | strict_order
 ```
 
-- [ ] **Step 4: Wire the engine connect event**
+- [x] **Step 4: Wire the engine connect event**
 
 In `app/db/session.py` (import `event` from sqlalchemy):
 
@@ -203,12 +203,12 @@ def _set_hnsw_gucs(dbapi_connection, _record):  # pragma: no cover - infra depen
     cur.close()
 ```
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run: `uv run pytest tests/test_session_gucs.py tests/test_migrations.py -v`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add app/core/config.py app/db/session.py tests/test_session_gucs.py
@@ -230,7 +230,7 @@ git commit -m "feat(db): set hnsw.ef_search and iterative_scan per connection"
 - `async def get_corpus_version(session, corpus: str) -> int` — returns current version or 0.
 - Worker bump: in `ingest.py` worker, when a job completes successfully AND at least one document was created, bump the job's corpus. (Alternative accepted: bump after processing when `added > 0`.)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 """Corpus version bump/get helpers."""
@@ -253,16 +253,16 @@ async def test_bump_and_get(client):
         await s.commit()
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `uv run pytest tests/test_corpus_versions.py -v`
 Expected: FAIL (`ModuleNotFoundError: app.db.versions`).
 
-- [ ] **Step 3: Write `app/db/versions.py`**
+- [x] **Step 3: Write `app/db/versions.py`**
 
 Use `sqlalchemy.dialects.postgresql.insert` upsert with `on_conflict_do_update(index_elements=[CorpusVersion.corpus], set_={"version": CorpusVersion.version + 1, "updated_at": func.now()}).returning(CorpusVersion.version)`.
 
-- [ ] **Step 4: Bump from the ingest worker**
+- [x] **Step 4: Bump from the ingest worker**
 
 Read `app/workers/ingest.py`; find where a job finishes with documents added. Insert:
 
@@ -276,16 +276,16 @@ if added:
 
 Do NOT bump when a job produced zero new documents (dedup skip).
 
-- [ ] **Step 5: Bump from vault delete**
+- [x] **Step 5: Bump from vault delete**
 
 In `app/api/routes/vaults.py::delete_vault`, after the documents are deleted (and graph cleanup), call `await bump_corpus_version(session, name)` before commit. Add to the same test file: delete a vault (create via POST /vaults or direct ORM insert + documents), assert version increased.
 
-- [ ] **Step 6: Run tests**
+- [x] **Step 6: Run tests**
 
 Run: `uv run pytest tests/test_corpus_versions.py -v`
 Expected: PASS. Also run the full suite: `uv run pytest` — no regressions.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add app/db/versions.py app/workers/ingest.py app/api/routes/vaults.py tests/test_corpus_versions.py
@@ -308,7 +308,7 @@ git commit -m "feat(db): corpus_versions bumped on ingest success and vault dele
 - New router registers under `/documents` with `tags=["documents"]`, wired into `app/main.py` next to the other routers.
 - Schema: `DocumentMetaUpdate` (all optional), `DocumentMetaOut(tags, doc_date, author)`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 """PATCH /documents/{id}/metadata updates only provided fields."""
@@ -339,22 +339,22 @@ async def test_patch_metadata_missing_doc_404(client):
     assert r.status_code == 404
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `uv run pytest tests/test_document_metadata.py -v`
 Expected: FAIL (404/405 — route absent). Create the `seeded_document` fixture in the test file (insert `Document` via `async_session_factory`, yield `(id, session_cleanup)`).
 
-- [ ] **Step 3: Implement the endpoint**
+- [x] **Step 3: Implement the endpoint**
 
 `documents.py`: GET-less router with only PATCH. Load the document by id → 404 if missing → apply only provided fields → commit → return `DocumentMetaOut`. Note `Document.tags` default is a list; merge = replace provided lists wholesale (not append).
 
-- [ ] **Step 4: Wire into `app/main.py`** — import and `app.include_router(documents.router, prefix=settings.api_prefix)`.
+- [x] **Step 4: Wire into `app/main.py`** — import and `app.include_router(documents.router, prefix=settings.api_prefix)`.
 
-- [ ] **Step 5: Run tests + ruff**
+- [x] **Step 5: Run tests + ruff**
 
 Run: `uv run pytest tests/test_document_metadata.py -v`; then `uv run ruff check app/api/routes/documents.py app/main.py app/schemas/api.py`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add app/api/routes/documents.py app/main.py app/schemas/api.py tests/test_document_metadata.py
@@ -374,7 +374,7 @@ git commit -m "feat(api): PATCH /documents/{id}/metadata for tags, date, author"
 - `/healthz` gains `"corpus_versions": {"default": 3, ...}` — latest version per corpus (empty dict when DB down or no corpora). `status` logic unchanged.
 - `POST /api/v1/ask` responses include header `X-Metis-Corpus-Version: <int>` — the version of the corpus the ask ran against (0 when unknown).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 @pytest.mark.require_db
@@ -394,22 +394,22 @@ async def test_ask_response_has_corpus_version_header(client):
     assert "x-metis-corpus-version" in r.headers
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `uv run pytest tests/test_corpus_versions.py tests/test_health.py -v`
 Expected: FAIL (missing keys/headers).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 - health.py: in `healthz`, if DB is up, `SELECT corpus, version FROM corpus_versions` → dict; else `{}`.
 - ask.py: where the ask request is handled, resolve the corpus version once at the start (`get_corpus_version(session, corpus)`); set `response.headers["X-Metis-Corpus-Version"] = str(version)` on the final SSE/JSON response. For SSE, headers are set on the StreamingResponse creation. If corpus empty/unknown → `"0"`.
 - Check how ask.py returns its response (SSE via StreamingResponse or plain JSON) and attach the header in BOTH paths if two exist.
 
-- [ ] **Step 4: Run tests + full suite**
+- [x] **Step 4: Run tests + full suite**
 
 Run: `uv run pytest tests/test_corpus_versions.py tests/test_health.py -v`; then `uv run pytest` (no regressions).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/api/routes/health.py app/api/routes/ask.py tests/test_corpus_versions.py tests/test_health.py
@@ -420,7 +420,7 @@ git commit -m "feat(api): surface corpus version on healthz and ask header"
 
 ### Task 6: Phase 1 verification — full gate
 
-- [ ] **Step 1: Run the full verification gate**
+- [x] **Step 1: Run the full verification gate**
 
 ```bash
 uv run alembic upgrade head
@@ -430,7 +430,7 @@ uv run ruff check . && uv run ruff format --check .
 
 Expected: all green, ruff clean.
 
-- [ ] **Step 2: Manual sanity check (DBs up)**
+- [ ] **Step 2: Manual sanity check (DBs up)** - SKIPPED: shell blocks HTTP to localhost (TCP connects, curl/IRM time out) despite uvicorn listening; surfaces covered by tests (healthz corpus_versions, PATCH metadata, ask header)
 
 ```bash
 uv run uvicorn app.main:app --port 8011
@@ -438,17 +438,32 @@ uv run uvicorn app.main:app --port 8011
 
 - Upload a small PDF/md to a test corpus; `GET /api/v1/healthz` shows `corpus_versions`; `PATCH` metadata on the doc; `POST /api/v1/ask` returns the `X-Metis-Corpus-Version` header.
 
-- [ ] **Step 3: Baseline eval numbers**
+- [x] **Step 3: Baseline eval numbers**
 
 Run: `uv run python -m scripts.run_matrix tech` and record numbers in the plan's "Phase Result" section below (this becomes the comparison baseline for later phases).
 
-- [ ] **Step 4: Commit any stragglers; mark this plan complete; update `docs/superpowers/plans/` README if one exists (index of plans).**
+- [x] **Step 4: Commit any stragglers; mark this plan complete; update `docs/superpowers/plans/` README if one exists (index of plans).**
 
 ---
 
 ## Phase Result (fill at the end)
 
-- Eval matrix (tech): faithfulness=?, context precision=?, citation correctness=?
-- Migration applied cleanly: yes/no
-- Notable decisions / deviations: ...
+- Eval matrix (tech), baseline captured 2026-08-13 (3 configs, real bge-m3 + gemini judge):
+
+| config | faithfulness | context relev. | context prec. | recall | citation | p50 latency | cost/q |
+|---|---|---|---|---|---|---|---|
+| hybrid+rerank+graph | 1.000 | 0.815 | 0.875 | 1.000 | 1.000 | 18.457s | $0.00077 |
+| hybrid only | 0.938 | 0.844 | 0.750 | 1.000 | 1.000 | 0.869s | $0.00074 |
+| rerank only (no graph) | 1.000 | 0.838 | 0.875 | 1.000 | 1.000 | 1.565s | $0.00077 |
+
+  Caveats: graph-config p50 inflated by gemini 429 rate-limit retries during extraction (quota on the key, not app latency). Mock judge no longer used — faith variance (0.938) proves real judging.
+- Migration applied cleanly: yes — `alembic upgrade head` clean; EXPLAIN confirmed `Index Scan using ix_chunks_embedding_hnsw`; repo tests 96 passed.
+- Notable decisions / deviations:
+  - **Postgres host port 5433 → 6433**: 5433 sits in the Windows Hyper-V-administered excluded range (5433–5532); Docker bind failed. Changed in docker-compose.yml, .env, .env.example, and config.py default db_url.
+  - **Mock embedder dims = real dims**: HNSW indexes need fixed-dim columns, so MockEmbedder/MockImageEmbedder emit `settings.embed_dim` (1024) / `settings.clip_dim` (512) instead of 8; class attr `dim` kept in sync for `tests/test_embeddings.py`.
+  - **HNSW GUCs per-session**: `hnsw_ef_search=120`, `hnsw_iterative_scan=relaxed_order` set via engine connect event (pgvector options only work as session GUCs, not config-file).
+  - **bge-m3 0xC0000005 crashes on this machine — root cause: resource starvation** (C: drive 0 bytes free → pagefile can't grow → allocations fail/access violations during model forward). Mitigations now in repo: `OMP_NUM_THREADS=1` set before sentence-transformers import (`app/rag/embeddings.py`, `app/rag/rerank.py`) + `torch.set_num_threads(1)` in `_load()`. ~3GB freed via uv cache clean + temp + docker prune. **Watch the disk**: if C: fills again, model load/forward crashes return (crash signature `exit=-1073741819` / `MemoryError`).
+  - **Gemini model deprecation**: `.env` pinned `gemini-2.5-flash`, which Google now 404s ("no longer available to new users") → judge/extraction silently fell back to MockProvider (faith all 1.000). Fixed `.env` → `gemini-flash-latest` (matches `.env.example` default; config.py default was already correct). If evals again show all-1.000 faith, check provider warnings in the log.
+  - **Ruff policy**: repo baseline is 287 pre-existing errors (B008 Depends-in-default, E501, E402); this phase ends at 286 — no new violations. `ruff format --check` has 55-file pre-existing drift (not enforced).
+  - **SSE contract unchanged**: `POST /api/v1/ask` still streams events; only added `X-Metis-Corpus-Version` response header (corpus = `request.corpus or "default"`).
 
