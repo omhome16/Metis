@@ -1,5 +1,7 @@
 """Document metadata management (tags, doc_date, author)."""
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +18,7 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 async def update_document_metadata(
     doc_id: str,
     payload: DocumentMetaUpdate,
-    session: AsyncSession = Depends(get_session),
+    session: Annotated[AsyncSession, Depends(get_session)],
 ) -> DocumentMetaOut:
     doc = await session.get(Document, doc_id)
     if doc is None:

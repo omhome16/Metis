@@ -7,7 +7,6 @@ Create Date: 2026-08-13
 """
 
 from alembic import op
-
 from app.core.config import get_settings
 
 # revision identifiers, used by Alembic.

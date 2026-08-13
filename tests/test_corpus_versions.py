@@ -41,7 +41,11 @@ async def test_vault_delete_bumps_version(client, require_db):
     r = await client.delete(f"/api/v1/vaults/{name}")
     assert r.status_code == 200
     async with async_session_factory() as s:
-        version = (await s.execute(select(CorpusVersion.version).where(CorpusVersion.corpus == name))).scalar()
+        version = (
+            await s.execute(
+                select(CorpusVersion.version).where(CorpusVersion.corpus == name)
+            )
+        ).scalar()
     assert version is not None and version >= 1
 
 
