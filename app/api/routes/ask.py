@@ -19,6 +19,7 @@ from app.cache import cache_lookup, cache_store, get_redis
 from app.core.tracing import flush_tracer, get_tracer, trace_span
 from app.db.models import Conversation, Message
 from app.db.session import get_session
+from app.db.versions import get_corpus_version
 from app.gateway.gateway import get_gateway
 from app.core.logging import get_logger
 from app.rag.embeddings import get_embedder
@@ -53,6 +54,9 @@ async def _cached_events(entry: dict) -> AsyncIterator[ServerSentEvent]:
 async def ask(request: AskRequest, session: AsyncSession = Depends(get_session)):
     gateway = get_gateway()
     tracer = get_tracer()
+
+    corpus = request.corpus or "default"
+    corpus_version = await get_corpus_version(session, corpus)
 
     # Load prior turns for this conversation (last 20) so follow-ups have context.
     history: list[dict] = []
@@ -170,4 +174,6 @@ async def ask(request: AskRequest, session: AsyncSession = Depends(get_session))
             logger.warning("conversation persistence skipped: %s", exc)
         flush_tracer(tracer)
 
-    return EventSourceResponse(event_stream())
+    return EventSourceResponse(
+        event_stream(), headers={"X-Metis-Corpus-Version": str(corpus_version)}
+    )

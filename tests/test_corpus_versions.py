@@ -43,3 +43,35 @@ async def test_vault_delete_bumps_version(client, require_db):
     async with async_session_factory() as s:
         version = (await s.execute(select(CorpusVersion.version).where(CorpusVersion.corpus == name))).scalar()
     assert version is not None and version >= 1
+
+
+async def test_ask_response_has_corpus_version_header(client, require_db):
+    from app.rag.embeddings import get_embedder
+    from app.rag.retrieval import store_chunks
+
+    corpus = "default"
+    doc_id = str(uuid.uuid4())
+    async with async_session_factory() as s:
+        s.add(
+            Document(
+                id=doc_id,
+                title="Hdr",
+                corpus=corpus,
+                format="txt",
+                content_hash=uuid.uuid4().hex,
+                raw_text="Hello world.",
+            )
+        )
+        await s.commit()
+        embedder = get_embedder()
+        embeddings = await embedder.embed_texts(["Hello world."])
+        await store_chunks(s, doc_id, ["Hello world."], embeddings)
+        await bump_corpus_version(s, corpus)
+
+    r = await client.post("/api/v1/ask", json={"question": "hi", "corpus": corpus})
+    assert r.status_code == 200
+    assert "x-metis-corpus-version" in r.headers
+
+    async with async_session_factory() as s:
+        await s.execute(delete(Document).where(Document.id == doc_id))
+        await s.commit()
