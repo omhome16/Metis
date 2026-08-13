@@ -43,6 +43,28 @@ DEFAULT_QUESTIONS: dict[str, list[dict]] = {
             ),
             "source_hint": "fastapi-notes",
         },
+        # P3.3: metadata-scoped question (exercises tags/date/author filters).
+        {
+            "question": (
+                "What does the 2024 documentation say about FastAPI's dependency injection?"
+            ),
+            "ground_truth": (
+                "FastAPI's dependency injection lets functions declare dependencies in their "
+                "signature, which FastAPI solves and injects automatically, including "
+                "sub-dependencies and yield-based cleanup."
+            ),
+            "source_hint": "fastapi-notes",
+        },
+        # P3.3: cross-section question (how one area relates to another).
+        {
+            "question": "How does FastAPI's routing relate to its request validation?",
+            "ground_truth": (
+                "Routing and validation work together: each route declares a path operation "
+                "whose parameters and body are validated against the declared models before "
+                "the handler runs."
+            ),
+            "source_hint": "fastapi-notes",
+        },
     ],
     "arts": [
         {
@@ -116,6 +138,30 @@ DEFAULT_QUESTIONS: dict[str, list[dict]] = {
                 "sciences of reason."
             ),
             "source_hint": "kant-critique-of-pure-reason",
+        },
+        # P3.3: metadata-scoped question (exercises date filters on the corpus).
+        {
+            "question": (
+                "What does Mill's On Liberty, published in 1859, say about freedom of opinion?"
+            ),
+            "ground_truth": (
+                "Mill argues that silencing an opinion robs the human race of the truth or "
+                "of the benefit of error corrected, so freedom of opinion is essential to "
+                "liberty."
+            ),
+            "source_hint": "mill-on-liberty",
+        },
+        # P3.3: cross-section question (how one doctrine relates to another).
+        {
+            "question": (
+                "How does Plato's allegory of the cave relate to Descartes' method of doubt?"
+            ),
+            "ground_truth": (
+                "Both use a radical break from the world of appearances: Plato's prisoners "
+                "must leave the cave's shadows to reach the Forms, and Descartes must doubt "
+                "all that can be doubted before accepting what is certain."
+            ),
+            "source_hint": "plato-republic",
         },
         {
             "question": (

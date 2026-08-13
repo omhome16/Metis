@@ -62,6 +62,19 @@ class Settings(BaseSettings):
     query_rewrite: bool = True
     rerank_enabled: bool = True
 
+    # ── Parent-child chunking (P3.1) ───────────────────────────────────────
+    # true: children (~child_size) are embedded and searched; context blocks
+    # come from their parents (~parent_size). false: flat chunks (old behavior).
+    parent_child: bool = True
+    parent_size: int = 2000
+    child_size: int = 400
+    child_overlap: int = 60
+
+    # ── Metadata filtering (P3.2) ──────────────────────────────────────────
+    # LLM (best-effort) extracts {tags, date_from, date_to, author} from the
+    # query; applied as SQL filters on both retrieval arms. Empty on failure.
+    metadata_filter: bool = True
+
     # ── Graph extraction (P2 lazy move) ────────────────────────────────────
     # true: LLM typed-relations at ingest; false: regex fallback only (offline build).
     graph_llm_extract: bool = True

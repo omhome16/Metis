@@ -1,4 +1,4 @@
-from app.rag.chunking import chunk_text, count_tokens
+from app.rag.chunking import chunk_into_parents, chunk_text, count_tokens
 
 
 def test_chunk_short_text_stays_single():
@@ -48,3 +48,41 @@ def test_chunk_prefers_sentence_boundary():
 def test_count_tokens():
     assert count_tokens("hello world") >= 1
     assert count_tokens("x" * 400) == 100
+
+
+def test_parents_short_text_single_block():
+    assert chunk_into_parents("short") == ["short"]
+
+
+def test_parents_never_split_paragraphs():
+    para = "A very long single paragraph without sentence breaks. " * 60
+    text = "\n\n".join(para for _ in range(3))
+    parents = chunk_into_parents(text, parent_size=300)
+    assert len(parents) >= 2
+    for p in parents:
+        assert "A very long single paragraph" in p  # each parent keeps whole paragraphs
+
+
+def test_parents_group_to_target_size():
+    paras = [f"Paragraph {i}. " + "content " * 40 for i in range(10)]
+    text = "\n\n".join(paras)
+    parents = chunk_into_parents(text, parent_size=300)
+    assert len(parents) >= 2
+    assert all(len(p) <= 300 + 500 for p in parents)  # one oversized paragraph may exceed
+
+
+def test_parents_cover_full_text():
+    paras = [f"Paragraph {i}. " + "content " * 40 for i in range(10)]
+    text = "\n\n".join(paras)
+    parents = chunk_into_parents(text, parent_size=300)
+    assert "Paragraph 0." in parents[0]
+    assert "Paragraph 9." in parents[-1]
+
+
+def test_parents_children_stay_within_parent():
+    text = "\n\n".join(f"Section {i} paragraph. " + "sentence. " * 30 for i in range(6))
+    parents = chunk_into_parents(text, parent_size=500)
+    assert len(parents) > 1
+    for parent in parents:
+        for child in chunk_text(parent, chunk_size=200, overlap=40):
+            assert child in parent  # children are sub-windows of their parent

@@ -30,9 +30,11 @@ from app.rag.chunking import count_tokens
 from app.rag.contradiction import check_contradiction, parse_citations
 from app.rag.context import assemble_context
 from app.rag.embeddings import get_embedder, get_image_embedder
+from app.rag.metadata import extract_query_metadata
 from app.rag.rerank import get_reranker
 from app.rag.retrieval import (
     ChunkHit,
+    expand_to_parents,
     fetch_chunks_by_id,
     fuse_hybrid,
     image_search,
@@ -61,15 +63,19 @@ async def retrieve_context(
     question: str,
     corpus: str | None,
     config: dict | None = None,
-) -> tuple[list[ChunkHit], str]:
-    """Query rewrite → hybrid (vector+keyword, RRF) → graph boost → rerank.
+) -> tuple[list[ChunkHit], str, dict]:
+    """Query rewrite → hybrid (vector+keyword, RRF) → graph boost → rerank → parents.
 
-    `config` (used by the eval harness) can override rerank_enabled / graph_boost / top_k_rerank.
+    `config` (used by the eval harness) can override rerank_enabled / graph_boost /
+    top_k_rerank / parent_child / metadata_filter. Returns (hits, rewritten, meta)
+    where `meta` is the active metadata filter ({} when none).
     """
     cfg = config or {}
     rerank_enabled = cfg.get("rerank_enabled", settings.rerank_enabled)
     graph_boost = cfg.get("graph_boost", True)
     top_k = int(cfg.get("top_k_rerank", settings.top_k_rerank))
+    parent_child = cfg.get("parent_child", settings.parent_child)
+    metadata_filter = cfg.get("metadata_filter", settings.metadata_filter)
 
     rewritten = question
     if settings.query_rewrite:
@@ -80,10 +86,21 @@ async def retrieve_context(
         except Exception as exc:  # noqa: BLE001
             logger.warning("query rewrite skipped: %s", exc)
 
+    meta: dict = {}
+    if metadata_filter:
+        try:
+            meta = await extract_query_metadata(gateway, rewritten)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("metadata filter skipped: %s", exc)
+
     embedder = get_embedder()
     query_vec = await embedder.embed_query(rewritten)
-    vector_hits = await vector_search(session, query_vec, corpus=corpus, top_k=settings.rerank_candidates)
-    keyword_hits = await keyword_search(session, rewritten, corpus=corpus, top_k=settings.rerank_candidates)
+    vector_hits = await vector_search(
+        session, query_vec, corpus=corpus, top_k=settings.rerank_candidates, meta=meta
+    )
+    keyword_hits = await keyword_search(
+        session, rewritten, corpus=corpus, top_k=settings.rerank_candidates, meta=meta
+    )
     hits = fuse_hybrid(vector_hits, keyword_hits, top_k=settings.rerank_candidates)
 
     if graph_boost:
@@ -102,7 +119,13 @@ async def retrieve_context(
     if rerank_enabled:
         hits = await get_reranker().rerank(rewritten, hits, top_k=top_k)
 
-    return hits, rewritten
+    if parent_child:
+        try:
+            hits = await expand_to_parents(session, hits)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("parent expansion skipped: %s", exc)
+
+    return hits, rewritten, meta
 
 
 async def contradiction_scan(
@@ -180,8 +203,10 @@ async def ask_events(
         # the rich, final source list arrives with the answer.
         yield ("sources", {"chunks": [], "agent": True})
     else:
-        hits, _rewritten = await retrieve_context(session, gateway, question, corpus)
+        hits, _rewritten, meta = await retrieve_context(session, gateway, question, corpus)
         yield ("sources", _sources_payload(hits))
+        if meta:
+            yield ("meta", {"filters": meta})
 
     # ── generation ────────────────────────────────────────────────────────
     out_tokens = 0

@@ -56,8 +56,27 @@ class Chunk(Base):
     chunk_index: Mapped[int] = mapped_column(Integer)
     tokens: Mapped[int] = mapped_column(Integer, default=0)
     embedding: Mapped[list[float] | None] = mapped_column(HalfVectorType)
+    parent_id: Mapped[str | None] = mapped_column(
+        ForeignKey("parent_chunks.id", ondelete="CASCADE"), index=True
+    )
 
     document: Mapped[Document] = relationship(back_populates="chunks")
+    parent: Mapped["ParentChunk | None"] = relationship(back_populates="children")
+
+
+class ParentChunk(Base):
+    """P3.1 parent-child (small-to-big): un-embedded parent block for context."""
+
+    __tablename__ = "parent_chunks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    doc_id: Mapped[str] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    start_chunk_idx: Mapped[int] = mapped_column(Integer, default=0)
+
+    children: Mapped[list[Chunk]] = relationship(
+        back_populates="parent", cascade="all, delete-orphan"
+    )
 
 
 class ImageRecord(Base):

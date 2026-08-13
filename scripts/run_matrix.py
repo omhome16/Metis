@@ -23,6 +23,30 @@ CONFIGS = [
         "graph_boost": False,
         "top_k_rerank": 5,
     },
+    # P3.1 comparison: parent-child (small-to-big) vs flat (kill switch). On
+    # corpora ingested flat, parent_child is a no-op — re-ingest to compare.
+    {
+        "name": "parent-child",
+        "rerank_enabled": True,
+        "graph_boost": True,
+        "top_k_rerank": 5,
+        "parent_child": True,
+    },
+    {
+        "name": "flat (no parent-child)",
+        "rerank_enabled": True,
+        "graph_boost": True,
+        "top_k_rerank": 5,
+        "parent_child": False,
+    },
+    # P3.2 comparison: metadata filters on/off.
+    {
+        "name": "metadata filter off",
+        "rerank_enabled": True,
+        "graph_boost": True,
+        "top_k_rerank": 5,
+        "metadata_filter": False,
+    },
 ]
 
 

@@ -29,7 +29,9 @@ async def answer_question(
 ) -> dict:
     """Non-streaming ask used by the harness (retrieval + generation, no SSE)."""
     t0 = time.perf_counter()
-    hits, _ = await retrieve_context(session, gateway, question, corpus, config=config)
+    hits, _rewritten, _meta = await retrieve_context(
+        session, gateway, question, corpus, config=config
+    )
     assembled = assemble_context(question, hits)
     try:
         result = await gateway.chat("generation", assembled.messages)

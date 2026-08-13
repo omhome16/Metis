@@ -14,9 +14,9 @@ from app.db.versions import bump_corpus_version
 from app.gateway.gateway import get_gateway
 from app.graph.extraction import extract_entities
 from app.graph.store import get_graph_store
-from app.rag.chunking import chunk_text
+from app.rag.chunking import chunk_into_parents, chunk_text
 from app.rag.embeddings import get_embedder, get_image_embedder
-from app.rag.retrieval import store_chunks, store_image
+from app.rag.retrieval import store_chunks, store_image, store_parents
 from app.rag.vision import describe_image, mime_for_file
 
 logger = get_logger(__name__)
@@ -73,15 +73,13 @@ async def process_ingest_job(ctx: dict, job_id: str) -> None:
 
 
 async def _process_text(session, gateway, graph, graph_ok, embedder, doc) -> None:
-    """Extract → chunk → embed → store chunks → build document graph."""
+    """Extract → chunk (flat or parent-child) → embed → store → build document graph."""
     text = extract_text(doc.format, doc.file_path or "")
     doc.raw_text = text
     await session.commit()
-    chunks = chunk_text(text, settings.chunk_size, settings.chunk_overlap)
-    if not chunks:
+    rows = await _build_chunks(session, embedder, doc, text)
+    if not rows:
         return
-    embeddings = await embedder.embed_texts(chunks)
-    rows = await store_chunks(session, doc.id, chunks, embeddings)
     if graph_ok:
         extracted = await extract_entities(gateway, text, use_llm=settings.graph_llm_extract)
         await graph.upsert_document_graph(
@@ -92,6 +90,37 @@ async def _process_text(session, gateway, graph, graph_ok, embedder, doc) -> Non
             entities=extracted.get("entities", []),
             relations=extracted.get("relations", []),
         )
+
+
+async def _build_chunks(session, embedder, doc, text: str) -> list:
+    """Parent-child (P3.1) when enabled; flat chunks otherwise.
+
+    Parents (~2000 chars, un-embedded) are stored first; their children
+    (~400 chars) are embedded and point back via `parent_id`.
+    """
+    if not settings.parent_child:
+        chunks = chunk_text(text, settings.chunk_size, settings.chunk_overlap)
+        if not chunks:
+            return []
+        embeddings = await embedder.embed_texts(chunks)
+        return await store_chunks(session, doc.id, chunks, embeddings)
+
+    parents = chunk_into_parents(text, settings.parent_size)
+    if not parents:
+        return []
+    per_parent_children: list[list[str]] = []
+    start_indices: list[int] = []
+    for parent in parents:
+        children = chunk_text(parent, settings.child_size, settings.child_overlap)
+        per_parent_children.append(children or [parent])
+        start_indices.append(sum(len(g) for g in per_parent_children[:-1]))
+    parent_rows = await store_parents(session, doc.id, parents, start_indices=start_indices)
+    child_texts = [c for group in per_parent_children for c in group]
+    parent_ids = [
+        parent_rows[i].id for i, group in enumerate(per_parent_children) for _ in group
+    ]
+    embeddings = await embedder.embed_texts(child_texts)
+    return await store_chunks(session, doc.id, child_texts, embeddings, parent_ids=parent_ids)
 
 
 async def _process_image(session, gateway, graph, graph_ok, doc) -> None:

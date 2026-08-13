@@ -96,6 +96,31 @@ def chunk_text(text: str, chunk_size: int = 900, overlap: int = 120) -> list[str
     return chunks
 
 
+def chunk_into_parents(text: str, parent_size: int = 2000) -> list[str]:
+    """P3.1 parent-child: structure-preserving parent blocks (~parent_size chars).
+
+    Paragraphs are grouped (blank-line separated) until the target size; oversized
+    paragraphs are kept whole (never split mid-paragraph) so each parent is a
+    self-contained unit. Children are then cut from each parent by `chunk_text`.
+    """
+    text = _clean(text)
+    if not text:
+        return []
+    if len(text) <= parent_size:
+        return [text]
+    parents: list[str] = []
+    buf = ""
+    for para in _split_paragraphs(text):
+        if buf and len(buf) + len(para) + 2 > parent_size:
+            parents.append(buf)
+            buf = para
+        else:
+            buf = f"{buf}\n\n{para}" if buf else para
+    if buf.strip():
+        parents.append(buf)
+    return parents
+
+
 def count_tokens(text: str) -> int:
     """Rough token estimate (~4 chars/token). Used for context budgeting."""
     return max(1, len(text) // 4)

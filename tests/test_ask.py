@@ -102,6 +102,44 @@ async def test_ask_empty_corpus_graceful(client, require_db):
     assert events[-1][0] == "done"
 
 
+async def test_ask_emits_meta_event_with_filters(client, require_db):
+    """P3.2: a dated query surfaces the active metadata filters in the meta event."""
+    import uuid as _uuid
+    from datetime import UTC, datetime
+
+    from sqlalchemy import update
+
+    corpus = f"test-meta-ask-{_uuid.uuid4().hex[:8]}"
+    await _seed(corpus)
+    async with async_session_factory() as session:
+        await session.execute(
+            update(Document)
+            .where(Document.corpus == corpus)
+            .values(doc_date=datetime(2024, 6, 1, tzinfo=UTC))
+        )
+        await session.commit()
+
+    with patch("app.api.routes.ask.get_gateway", return_value=FakeGateway()):
+        resp = await client.post(
+            "/api/v1/ask",
+            json={
+                "question": "What does the 2024 documentation say about strategy?",
+                "corpus": corpus,
+            },
+        )
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    names = [e for e, _ in events]
+    assert "meta" in names
+    assert names.index("meta") == 1  # right after sources
+    meta = dict(events)["meta"]
+    assert meta["filters"]["date_from"] == "2024-01-01"
+    assert meta["filters"]["date_to"] == "2024-12-31"
+    assert dict(events)["sources"]["chunks"]  # dated doc still retrieved under the filter
+
+    await _cleanup(corpus)
+
+
 _PNG = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
     "0000000d49444154789c626001000000ffff03000006000557bfabd40000000049454e44ae426082"
