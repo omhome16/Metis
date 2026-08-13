@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.models import Document, IngestJob
 from app.db.session import async_session_factory
+from app.db.versions import bump_corpus_version
 from app.gateway.gateway import get_gateway
 from app.graph.extraction import extract_entities
 from app.graph.store import get_graph_store
@@ -65,6 +66,8 @@ async def process_ingest_job(ctx: dict, job_id: str) -> None:
             await session.commit()
 
         job.status = "done" if not job.per_file_errors else "failed"
+        if docs and not job.per_file_errors:
+            await bump_corpus_version(session, job.corpus)
         await session.commit()
         logger.info("job %s finished: %d docs, errors=%s", job_id, len(docs), job.per_file_errors)
 

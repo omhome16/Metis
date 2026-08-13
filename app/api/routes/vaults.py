@@ -6,7 +6,6 @@ document content/chunks/file access, the per-vault knowledge graph export, and
 suggested questions built from the vault's top entities.
 """
 
-from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -18,8 +17,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from app.db.models import Chunk, Document, ImageRecord, IngestJob, Vault
 from app.db.session import get_session
+from app.db.versions import bump_corpus_version
 from app.graph.store import get_graph_store
-from app.schemas.api import DocumentChunkOut, DocumentSummary, VaultCreate, VaultSummary, VaultUpdate
+from app.schemas.api import (
+    DocumentChunkOut,
+    DocumentSummary,
+    VaultCreate,
+    VaultSummary,
+    VaultUpdate,
+)
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["vaults"])
@@ -166,6 +172,7 @@ async def delete_vault(name: str, session: AsyncSession = Depends(get_session)) 
         logger.warning("vault graph cleanup skipped: %s", exc)
     await session.execute(delete(Document).where(Document.corpus == name))  # chunks/images cascade
     await session.delete(vault)
+    await bump_corpus_version(session, name)
     await session.commit()
     return {"deleted": name}
 
@@ -345,6 +352,7 @@ async def delete_document(doc_id: str, session: AsyncSession = Depends(get_sessi
     except Exception as exc:  # noqa: BLE001
         logger.warning("document graph cleanup skipped: %s", exc)
     await session.delete(d)  # chunks/images cascade via FK
+    await bump_corpus_version(session, d.corpus)
     await session.commit()
     return {"deleted": doc_id}
 
