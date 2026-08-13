@@ -11,6 +11,9 @@ from app.gateway.gateway import LLMGateway
 
 logger = get_logger(__name__)
 
+# Sentence punctuation stripped from entity-name edges ('C++'/'A.I.' survive).
+_EDGE_PUNCT = ".,;:!?()[]{}'\"-–—"
+
 ENTITY_TYPES = [
     "Person", "Place", "Concept", "Artwork", "Work", "Event", "Organization", "Technology",
 ]
@@ -24,6 +27,17 @@ EXTRACTION_PROMPT = (
 )
 
 _EXCLUDED = {"i", "the", "a", "an", "we", "you", "they", "it", "he", "she", "this", "that", "and", "or"}
+
+
+def normalize_entity_name(name: str) -> str:
+    """Canonical entity key: case-folded, whitespace-collapsed, punctuation-stripped.
+
+    Used as the Neo4j `Entity.canonical` MERGE key so 'Neo4j', 'neo4j' and
+    'Neo4j,' collapse onto one node (aliases kept for display/search). Only
+    *surrounding sentence punctuation* is stripped — 'C++' stays 'c++'.
+    """
+    stripped = (name or "").strip().strip(_EDGE_PUNCT)
+    return re.sub(r"\s+", " ", stripped).lower()
 
 
 def extract_entities_fallback(text: str, limit: int = 40) -> dict:
@@ -41,8 +55,15 @@ def extract_entities_fallback(text: str, limit: int = 40) -> dict:
     return {"entities": entities, "relations": []}
 
 
-async def extract_entities(gateway: LLMGateway, text: str, max_chars: int = 8000) -> dict:
-    """Extract entities + relations. Tries the LLM first, falls back to regex."""
+async def extract_entities(gateway: LLMGateway, text: str, max_chars: int = 8000, use_llm: bool = True) -> dict:
+    """Extract entities + relations.
+
+    LLM path (typed relations) when `use_llm`; otherwise the local regex fallback
+    (LazyGraphRAG-style default — zero LLM cost, offline-safe). Toggle via
+    METIS_GRAPH_LLM_EXTRACT.
+    """
+    if not use_llm:
+        return extract_entities_fallback(text)
     messages = [
         {"role": "system", "content": EXTRACTION_PROMPT},
         {"role": "user", "content": text[:max_chars]},
@@ -62,7 +83,11 @@ async def extract_entities(gateway: LLMGateway, text: str, max_chars: int = 8000
         if e.get("name")
     ]
     clean_rels = [
-        {"source": str(r.get("source", "")).strip(), "target": str(r.get("target", "")).strip(), "type": str(r.get("type", "RELATED_TO"))[:40]}
+        {
+            "source": str(r.get("source", "")).strip(),
+            "target": str(r.get("target", "")).strip(),
+            "type": str(r.get("type", "RELATED_TO"))[:40],
+        }
         for r in relations[:50]
         if r.get("source") and r.get("target")
     ]

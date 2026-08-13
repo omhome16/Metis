@@ -76,6 +76,7 @@ async def _wipe_test_graph(store) -> None:
         await session.run(
             "MATCH (i:Image) WHERE NOT EXISTS { (i)-[:BELONGS_TO]->(:Document) } DETACH DELETE i"
         )
+        await session.run("MATCH (a:Alias) WHERE NOT EXISTS { (a)-[:ALIAS_OF]->(:Entity) } DELETE a")
         await session.run("MATCH (e:Entity) WHERE NOT EXISTS { (e)--() } DELETE e")
 
 

@@ -1,16 +1,38 @@
 """Neo4j property-graph store (blueprint §6): documents, chunks, entities, topics.
 
 Uses the async driver. All methods degrade to safe empty results when Neo4j is down.
+
+Entities are merged by their *canonical* key (`normalize_entity_name`): 'Neo4j',
+'neo4j' and 'Neo4j,' all resolve to one node whose `name` is the first-seen
+display variant. Later variants become `:Alias {name}` nodes with an ALIAS_OF
+edge to the canonical entity, so re-ingest never duplicates nodes (P2.2).
 """
 
+import re
 from functools import lru_cache
 
 from neo4j import AsyncGraphDatabase
 
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
+from app.graph.extraction import normalize_entity_name
 
 logger = get_logger(__name__)
+
+_ENTITY_MERGE = (
+    "MERGE (e:Entity {canonical: $key}) "
+    "ON CREATE SET e.name = $display, e.type = $type "
+    "ON MATCH SET e.type = coalesce(e.type, $type) "
+    "WITH e, $display AS display "
+    "FOREACH (x IN CASE WHEN display <> e.name THEN [1] ELSE [] END | "
+    "  MERGE (a:Alias {name: display}) ON CREATE SET a.normalized = e.canonical "
+    "  MERGE (a)-[:ALIAS_OF]->(e)) "
+    "RETURN e"
+)
+
+
+def _clean_display(name: str) -> str:
+    return re.sub(r"\s+", " ", (name or "").strip())[:120]
 
 
 def _different_vaults(a: dict | None, b: dict | None) -> bool:
@@ -46,10 +68,93 @@ class GraphStore:
             "CREATE CONSTRAINT document_id IF NOT EXISTS FOR (d:Document) REQUIRE d.id IS UNIQUE",
             "CREATE CONSTRAINT chunk_id IF NOT EXISTS FOR (c:Chunk) REQUIRE c.id IS UNIQUE",
             "CREATE CONSTRAINT entity_name IF NOT EXISTS FOR (e:Entity) REQUIRE e.name IS UNIQUE",
+            "CREATE CONSTRAINT entity_canonical IF NOT EXISTS FOR (e:Entity) REQUIRE e.canonical IS UNIQUE",
+            "CREATE CONSTRAINT alias_name IF NOT EXISTS FOR (a:Alias) REQUIRE a.name IS UNIQUE",
         ]
         async with self._driver.session() as session:
             for stmt in statements:
                 await session.run(stmt)
+        await self._backfill_canonical()
+
+    async def _backfill_canonical(self) -> None:
+        """One-time pass: give legacy nodes (no `canonical`) a canonical key.
+
+        Collisions (two legacy names that normalize identically, or a legacy name
+        that normalizes to an existing canonical) resolve to an :Alias node:
+        its edges are re-pointed onto the canonical entity.
+        """
+        try:
+            async with self._driver.session() as session:
+                result = await session.run(
+                    "MATCH (e:Entity) WHERE e.canonical IS NULL RETURN e.name AS name"
+                )
+                rows = [(r["name"], normalize_entity_name(r["name"])) async for r in result]
+                for name, key in rows:
+                    if not key:
+                        continue
+                    exists = await (
+                        await session.run(
+                            "MATCH (e:Entity {canonical: $key}) RETURN count(e) AS c",
+                            key=key,
+                        )
+                    ).single()
+                    if exists and exists["c"] > 0:
+                        await self._collapse_to_alias(session, name, key)
+                        continue
+                    await session.run(
+                        "MATCH (e:Entity {name: $n}) SET e.canonical = $key",
+                        n=name, key=key,
+                    )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("canonical backfill failed: %s", exc)
+
+    async def _collapse_to_alias(self, session, name: str, key: str) -> None:
+        """Relabel a colliding legacy entity as an :Alias and re-point its edges."""
+        await session.run(
+            "MATCH (e:Entity {name: $n}) SET e:Alias, e.normalized = $key",
+            n=name, key=key,
+        )
+        await session.run(
+            "MATCH (a:Alias {name: $n}), (e:Entity {canonical: $key}) MERGE (a)-[:ALIAS_OF]->(e)",
+            n=name, key=key,
+        )
+        await session.run(
+            "MATCH (a:Alias {name: $n})-[:ALIAS_OF]->(e) MATCH (ch:Chunk)-[r:MENTIONS]->(a) "
+            "MERGE (ch)-[:MENTIONS]->(e) DELETE r",
+            n=name,
+        )
+        await session.run(
+            "MATCH (a:Alias {name: $n})-[:ALIAS_OF]->(e) MATCH (a)-[r:MENTIONED_IN]->(d:Document) "
+            "MERGE (e)-[:MENTIONED_IN]->(d) DELETE r",
+            n=name,
+        )
+        await session.run(
+            "MATCH (a:Alias {name: $n})-[:ALIAS_OF]->(e) "
+            "MATCH (a)-[r:RELATED_TO]-(x) WHERE NOT x:Alias "
+            "MERGE (e)-[rel:RELATED_TO]->(x) "
+            "ON CREATE SET rel.type = coalesce(r.type, 'RELATED_TO'), rel.weight = coalesce(r.weight, 1.0) "
+            "DELETE r",
+            n=name,
+        )
+        await session.run(
+            "MATCH (a:Alias {name: $n})-[:ALIAS_OF]->(e) "
+            "MATCH (x)-[r:RELATED_TO]->(a) WHERE NOT x:Alias "
+            "MERGE (x)-[rel:RELATED_TO]->(e) "
+            "ON CREATE SET rel.type = coalesce(r.type, 'RELATED_TO'), rel.weight = coalesce(r.weight, 1.0) "
+            "DELETE r",
+            n=name,
+        )
+
+    async def _merge_entity(self, session, name: str, entity_type: str | None = None) -> None:
+        """MERGE by canonical key; keep first-seen display name; later variants become aliases."""
+        key = normalize_entity_name(name)
+        if not key:
+            return
+        display = _clean_display(name)
+        await session.run(
+            _ENTITY_MERGE,
+            key=key, display=display, type=(entity_type or "Concept")[:40],
+        )
 
     # ── writes ──────────────────────────────────────────────────────────────
     async def upsert_document(self, doc_id: str, title: str, corpus: str) -> None:
@@ -70,37 +175,50 @@ class GraphStore:
 
     async def add_entity(self, name: str, entity_type: str = "Concept") -> None:
         async with self._driver.session() as session:
-            await session.run(
-                "MERGE (e:Entity {name: $name}) ON CREATE SET e.type = $type",
-                name=name, type=entity_type,
-            )
+            await self._merge_entity(session, name, entity_type)
 
     async def add_mention(self, chunk_id: str, entity_name: str) -> None:
         async with self._driver.session() as session:
+            key = normalize_entity_name(entity_name)
+            if not key:
+                return
+            await self._merge_entity(session, entity_name)
             await session.run(
-                "MATCH (c:Chunk {id: $chunk_id}) MERGE (e:Entity {name: $name}) "
+                "MATCH (c:Chunk {id: $chunk_id}) "
+                "MERGE (e:Entity {canonical: $key}) "
                 "MERGE (c)-[:MENTIONS]->(e)",
-                chunk_id=chunk_id, name=entity_name,
+                chunk_id=chunk_id, key=key,
             )
 
     async def add_doc_mention(self, doc_id: str, entity_name: str) -> None:
         """Link an entity to a document (used when the name isn't found verbatim in any chunk)."""
         async with self._driver.session() as session:
+            key = normalize_entity_name(entity_name)
+            if not key:
+                return
+            await self._merge_entity(session, entity_name)
             await session.run(
-                "MATCH (d:Document {id: $doc_id}) MERGE (e:Entity {name: $name}) "
+                "MATCH (d:Document {id: $doc_id}) "
+                "MERGE (e:Entity {canonical: $key}) "
                 "MERGE (e)-[:MENTIONED_IN]->(d)",
-                doc_id=doc_id, name=entity_name,
+                doc_id=doc_id, key=key,
             )
 
     async def add_relation(self, source: str, target: str, rel_type: str = "RELATED_TO", evidence_chunk: str | None = None) -> None:
         async with self._driver.session() as session:
+            src_key = normalize_entity_name(source)
+            tgt_key = normalize_entity_name(target)
+            if not src_key or not tgt_key:
+                return
+            await self._merge_entity(session, source)
+            await self._merge_entity(session, target)
             await session.run(
-                "MATCH (a:Entity {name: $source}) MATCH (b:Entity {name: $target}) "
+                "MATCH (a:Entity {canonical: $src}) MATCH (b:Entity {canonical: $tgt}) "
                 "MERGE (a)-[r:RELATED_TO {type: $rel_type}]->(b) "
                 "ON CREATE SET r.weight = 1.0, r.evidence_chunk = $evidence "
                 "ON MATCH SET r.weight = r.weight + 1.0, "
                 "  r.evidence_chunk = coalesce(r.evidence_chunk, $evidence)",
-                source=source, target=target, rel_type=rel_type, evidence=evidence_chunk,
+                src=src_key, tgt=tgt_key, rel_type=rel_type, evidence=evidence_chunk,
             )
 
     async def upsert_document_graph(
@@ -150,29 +268,31 @@ class GraphStore:
     async def neighbor_chunk_ids(self, entity_names: list[str], max_hops: int = 2, limit: int = 10) -> list[str]:
         if not entity_names:
             return []
+        names = [n for n in entity_names if normalize_entity_name(n)]
         if max_hops >= 2:
             query = (
                 "MATCH (e:Entity)-[:RELATED_TO*1..2]-(e2:Entity)-[:MENTIONS]-(c:Chunk) "
-                "WHERE e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit "
+                "WHERE e.canonical IN $names OR e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit "
                 "UNION "
                 "MATCH (e:Entity)-[:MENTIONED_IN]->(:Document)-[:CONTAINS]->(c:Chunk) "
-                "WHERE e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit"
+                "WHERE e.canonical IN $names OR e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit"
             )
         else:
             query = (
                 "MATCH (e:Entity)-[:MENTIONS]-(c:Chunk) "
-                "WHERE e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit "
+                "WHERE e.canonical IN $names OR e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit "
                 "UNION "
                 "MATCH (e:Entity)-[:MENTIONED_IN]->(:Document)-[:CONTAINS]->(c:Chunk) "
-                "WHERE e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit"
+                "WHERE e.canonical IN $names OR e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit"
             )
         async with self._driver.session() as session:
-            result = await session.run(query, names=list(entity_names), limit=limit)
+            result = await session.run(query, names=names, limit=limit)
             return [record["id"] async for record in result]
 
     async def connections(self, from_name: str, to_name: str, max_paths: int = 3) -> list[dict]:
         query = (
-            "MATCH p = allShortestPaths((a:Entity {name: $from})-[*1..6]-(b:Entity {name: $to})) "
+            "MATCH p = allShortestPaths((a:Entity)-[*1..6]-(b:Entity)) "
+            "WHERE (a.name = $from OR a.canonical = $from) AND (b.name = $to OR b.canonical = $to) "
             "RETURN [n IN nodes(p) | coalesce(n.name, n.text)] AS path, [r IN relationships(p) | type(r)] AS rels "
             "LIMIT $max_paths"
         )
@@ -184,7 +304,8 @@ class GraphStore:
     async def explore(self, name: str, depth: int = 2, limit: int = 50) -> list[dict]:
         depth = max(1, min(int(depth), 4))  # Cypher forbids params in path-length bounds
         query = (
-            f"MATCH (e:Entity {{name: $name}})-[r*1..{depth}]-(n) "
+            f"MATCH (e:Entity)-[r*1..{depth}]-(n) "
+            "WHERE e.name = $name OR e.canonical = $name "
             "RETURN labels(n)[0] AS label, coalesce(n.name, n.text) AS value, "
             "[rel IN r | type(rel)] AS rels LIMIT $limit"
         )
@@ -223,9 +344,10 @@ class GraphStore:
             )
             for name in self._caption_entities(caption):
                 await session.run(
-                    "MATCH (img:Image {id: $doc_id}) MERGE (e:Entity {name: $name}) "
+                    "MATCH (img:Image {id: $doc_id}) "
+                    "MERGE (e:Entity {canonical: $key}) ON CREATE SET e.name = $name "
                     "MERGE (img)-[:DEPICTS]->(e)",
-                    doc_id=doc_id, name=name,
+                    doc_id=doc_id, name=_clean_display(name), key=normalize_entity_name(name),
                 )
 
     @staticmethod
@@ -385,6 +507,7 @@ class GraphStore:
             async with self._driver.session() as session:
                 result = await session.run(
                     "MATCH (e:Entity) WHERE toLower(e.name) CONTAINS toLower($q) "
+                    "OR e.canonical CONTAINS toLower($q) "
                     "RETURN e.name AS name, coalesce(e.type, 'Concept') AS type, COUNT { (e)--() } AS degree "
                     "ORDER BY degree DESC LIMIT $limit",
                     q=query.strip(), limit=max(1, min(int(limit), 50)),
@@ -408,7 +531,8 @@ class GraphStore:
         except (TypeError, ValueError):  # noqa: BLE001 — garbage input degrades to default
             hops = 6
         query = (
-            f"MATCH p = allShortestPaths((a:Entity {{name: $from}})-[*1..{hops}]-(b:Entity {{name: $to}})) "
+            f"MATCH p = allShortestPaths((a:Entity)-[*1..{hops}]-(b:Entity)) "
+            "WHERE (a.name = $from OR a.canonical = $from) AND (b.name = $to OR b.canonical = $to) "
             "RETURN [n IN nodes(p) | labels(n)[0] + '::' + coalesce(n.name, n.text)] AS node_refs, "
             "       [r IN relationships(p) | type(r)] AS rels "
             "LIMIT 1"
@@ -615,6 +739,7 @@ class GraphStore:
         """Delete chunks/images whose document is gone, then entities left with no edges."""
         await session.run("MATCH (c:Chunk) WHERE NOT EXISTS { (c)<-[:CONTAINS]-(:Document) } DETACH DELETE c")
         await session.run("MATCH (i:Image) WHERE NOT EXISTS { (i)-[:BELONGS_TO]->(:Document) } DETACH DELETE i")
+        await session.run("MATCH (a:Alias) WHERE NOT EXISTS { (a)-[:ALIAS_OF]->(:Entity) } DELETE a")
         await session.run("MATCH (e:Entity) WHERE NOT EXISTS { (e)--() } DELETE e")
 
 

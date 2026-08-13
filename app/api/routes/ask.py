@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
 from app.api.routes.conversations import append_message
-from app.cache import cache_lookup, cache_store, get_redis
+from app.cache import cache_lookup, cache_store
 from app.core.tracing import flush_tracer, get_tracer, trace_span
 from app.db.models import Conversation, Message
 from app.db.session import get_session
@@ -84,12 +84,8 @@ async def ask(request: AskRequest, session: AsyncSession = Depends(get_session))
         collected: dict = {"sources": None, "citations": None, "done": None, "answer_parts": [], "error": None}
         if not request.image:
             try:
-                redis = await get_redis()
-                try:
-                    query_vec = await get_embedder().embed_query(request.question)
-                    cached = await cache_lookup(redis, query_vec, request.corpus)
-                finally:
-                    await redis.aclose()  # never leak the client on lookup errors
+                query_vec = await get_embedder().embed_query(request.question)
+                cached = await cache_lookup(session, query_vec, request.corpus, current_version=corpus_version)
                 if cached:
                     logger.info("cache HIT for corpus=%s", request.corpus)
                     cached_flag = True
@@ -122,21 +118,18 @@ async def ask(request: AskRequest, session: AsyncSession = Depends(get_session))
 
             if not request.image and collected["done"]:
                 try:
-                    redis = await get_redis()
-                    try:
-                        await cache_store(
-                            redis,
-                            request.question,
-                            request.corpus,
-                            {
-                                "sources": collected["sources"],
-                                "citations": collected["citations"],
-                                "done": collected["done"],
-                                "answer": "".join(collected["answer_parts"]),
-                            },
-                        )
-                    finally:
-                        await redis.aclose()
+                    await cache_store(
+                        session,
+                        request.question,
+                        request.corpus,
+                        {
+                            "sources": collected["sources"],
+                            "citations": collected["citations"],
+                            "done": collected["done"],
+                            "answer": "".join(collected["answer_parts"]),
+                        },
+                        current_version=corpus_version,
+                    )
                 except Exception:  # noqa: BLE001
                     pass
 

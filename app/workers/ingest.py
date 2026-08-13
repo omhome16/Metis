@@ -83,7 +83,7 @@ async def _process_text(session, gateway, graph, graph_ok, embedder, doc) -> Non
     embeddings = await embedder.embed_texts(chunks)
     rows = await store_chunks(session, doc.id, chunks, embeddings)
     if graph_ok:
-        extracted = await extract_entities(gateway, text)
+        extracted = await extract_entities(gateway, text, use_llm=settings.graph_llm_extract)
         await graph.upsert_document_graph(
             doc_id=doc.id,
             title=doc.title,

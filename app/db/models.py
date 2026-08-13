@@ -124,6 +124,40 @@ class CorpusVersion(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class CacheEntry(Base):
+    """Semantic cache v2 (P2.3): grounded answers, indexed by question embedding.
+
+    Lookup is a single `ORDER BY question_embedding <=> :q LIMIT 1` query gated
+    by corpus_version (staleness) and expires_at (TTL). Redis is queue-only now.
+    """
+
+    __tablename__ = "cache_entries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    corpus: Mapped[str] = mapped_column(String(128), index=True)
+    question: Mapped[str] = mapped_column(Text)
+    question_embedding: Mapped[list[float] | None] = mapped_column(HalfVectorType)
+    answer: Mapped[str] = mapped_column(Text, default="")
+    sources: Mapped[dict] = mapped_column(JSON, default=dict)
+    citations: Mapped[dict] = mapped_column(JSON, default=dict)
+    done: Mapped[dict] = mapped_column(JSON, default=dict)
+    model: Mapped[str] = mapped_column(String(128), default="")
+    embed_model: Mapped[str] = mapped_column(String(256), default="")
+    corpus_version: Mapped[int] = mapped_column(Integer, default=0)
+    hit_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CacheMetric(Base):
+    """Coarse lookup/miss counters for /cache/stats (no Redis dependency)."""
+
+    __tablename__ = "cache_metrics"
+
+    key: Mapped[str] = mapped_column(String(32), primary_key=True)
+    value: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class Conversation(Base):
     """A server-side chat session scoped to one vault (conversation history)."""
 

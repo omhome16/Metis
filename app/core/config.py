@@ -58,8 +58,13 @@ class Settings(BaseSettings):
     rerank_candidates: int = 20
     top_k_rerank: int = 5
     cache_similarity_threshold: float = 0.92
+    cache_ttl_days: int = 7
     query_rewrite: bool = True
     rerank_enabled: bool = True
+
+    # ── Graph extraction (P2 lazy move) ────────────────────────────────────
+    # true: LLM typed-relations at ingest; false: regex fallback only (offline build).
+    graph_llm_extract: bool = True
 
     # ── HNSW tuning (pgvector 0.8+; per-connection GUCs) ──────────────────
     hnsw_ef_search: int = 120
