@@ -38,7 +38,7 @@ class Embedder:
 
 
 class MockEmbedder:
-    """Deterministic hashed vectors (8-dim) — no model download, tests only."""
+    """Deterministic hashed vectors (dim mirrors METIS_EMBED_DIM) — no model download, tests only."""
 
     dim = 8
 
@@ -48,10 +48,11 @@ class MockEmbedder:
     async def embed_query(self, text: str) -> list[float]:
         return self._hash_vec(text)
 
-    @staticmethod
-    def _hash_vec(text: str) -> list[float]:
+    @classmethod
+    def _hash_vec(cls, text: str) -> list[float]:
         digest = hashlib.sha256(text.encode()).digest()
-        vec = [b / 255.0 for b in digest[:8]]
+        raw = b"".join(digest for _ in range((cls.dim + len(digest) - 1) // len(digest)))[: cls.dim]
+        vec = [b / 255.0 for b in raw]
         norm = sum(x * x for x in vec) ** 0.5 or 1.0
         return [x / norm for x in vec]
 
@@ -63,7 +64,11 @@ def get_embedder(settings: Settings | None = None) -> Embedder | MockEmbedder:
     global _EMBEDDER
     if _EMBEDDER is None:
         s = settings or get_settings()
-        _EMBEDDER = MockEmbedder() if s.embed_model == "mock" else Embedder(s.embed_model)
+        if s.embed_model == "mock":
+            MockEmbedder.dim = s.embed_dim
+            _EMBEDDER = MockEmbedder()
+        else:
+            _EMBEDDER = Embedder(s.embed_model)
     return _EMBEDDER
 
 
@@ -88,13 +93,14 @@ class ImageEmbedder:
 
 
 class MockImageEmbedder:
-    """Deterministic hash of image bytes (8-dim) — tests only."""
+    """Deterministic hash of image bytes (dim mirrors METIS_CLIP_DIM) — tests only."""
 
     dim = 8
 
     async def embed_image(self, data: bytes, mime: str = "image/png") -> list[float]:
         digest = hashlib.sha256(data).digest()
-        vec = [b / 255.0 for b in digest[: self.dim]]
+        raw = b"".join(digest for _ in range((self.dim + len(digest) - 1) // len(digest)))[: self.dim]
+        vec = [b / 255.0 for b in raw]
         norm = sum(x * x for x in vec) ** 0.5 or 1.0
         return [x / norm for x in vec]
 
@@ -106,5 +112,9 @@ def get_image_embedder(settings: Settings | None = None) -> ImageEmbedder | Mock
     global _IMAGE_EMBEDDER
     if _IMAGE_EMBEDDER is None:
         s = settings or get_settings()
-        _IMAGE_EMBEDDER = MockImageEmbedder() if s.clip_model == "mock" else ImageEmbedder(s.clip_model)
+        if s.clip_model == "mock":
+            MockImageEmbedder.dim = s.clip_dim
+            _IMAGE_EMBEDDER = MockImageEmbedder()
+        else:
+            _IMAGE_EMBEDDER = ImageEmbedder(s.clip_model)
     return _IMAGE_EMBEDDER

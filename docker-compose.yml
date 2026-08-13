@@ -8,9 +8,10 @@ services:
       POSTGRES_USER: metis
       POSTGRES_PASSWORD: metis
       POSTGRES_DB: metis
-    # 5433 on host: avoids clashing with any locally installed Postgres on 5432.
+    # 6433 on host: avoids clashing with locally installed Postgres on 5432 AND
+    # the Windows Hyper-V reserved port range that blocks 5433-5532.
     ports:
-      - "5433:5432"
+      - "6433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

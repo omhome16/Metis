@@ -7,7 +7,11 @@ Schema mirrors `metis-blueprint.md` §6. Embedding columns use the variable-leng
 import uuid
 from datetime import datetime, timezone
 
-from pgvector.sqlalchemy import Vector
+try:
+    from pgvector.sqlalchemy import HALFVEC as HalfVectorType
+except ImportError:  # older pgvector package
+    from pgvector.sqlalchemy import HalfVector as HalfVectorType  # type: ignore[no-redef]
+
 from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -35,6 +39,9 @@ class Document(Base):
     ingest_job_id: Mapped[str | None] = mapped_column(String(36), index=True)
     raw_text: Mapped[str | None] = mapped_column(Text)
     file_path: Mapped[str | None] = mapped_column(String(1024))
+    tags: Mapped[list[str]] = mapped_column(ARRAY(String(128)), default=list)
+    doc_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    author: Mapped[str | None] = mapped_column(String(256))
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     chunks: Mapped[list["Chunk"]] = relationship(back_populates="document", cascade="all, delete-orphan")
@@ -48,7 +55,7 @@ class Chunk(Base):
     text: Mapped[str] = mapped_column(Text)
     chunk_index: Mapped[int] = mapped_column(Integer)
     tokens: Mapped[int] = mapped_column(Integer, default=0)
-    embedding: Mapped[list[float] | None] = mapped_column(Vector)
+    embedding: Mapped[list[float] | None] = mapped_column(HalfVectorType)
 
     document: Mapped[Document] = relationship(back_populates="chunks")
 
@@ -61,7 +68,7 @@ class ImageRecord(Base):
     file_path: Mapped[str] = mapped_column(String(1024))
     caption: Mapped[str | None] = mapped_column(Text)
     tags: Mapped[list[str]] = mapped_column(ARRAY(String(128)), default=list)
-    embedding: Mapped[list[float] | None] = mapped_column(Vector)
+    embedding: Mapped[list[float] | None] = mapped_column(HalfVectorType)
 
 
 class GoldenQuestion(Base):
@@ -104,6 +111,16 @@ class IngestJob(Base):
     progress: Mapped[float] = mapped_column(Float, default=0.0)
     per_file_errors: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class CorpusVersion(Base):
+    """Monotonic version per corpus, bumped on every successful ingest/delete."""
+
+    __tablename__ = "corpus_versions"
+
+    corpus: Mapped[str] = mapped_column(String(128), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 

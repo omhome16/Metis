@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
 
     # ── Databases (docker-compose.yml) ─────────────────────────────────────
-    db_url: str = "postgresql+asyncpg://metis:metis@localhost:5433/metis"
+    db_url: str = "postgresql+asyncpg://metis:metis@localhost:6433/metis"
     redis_url: str = "redis://localhost:6379/0"
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
