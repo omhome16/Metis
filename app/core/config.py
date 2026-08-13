@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     query_rewrite: bool = True
     rerank_enabled: bool = True
 
+    # ── HNSW tuning (pgvector 0.8+; per-connection GUCs) ──────────────────
+    hnsw_ef_search: int = 120
+    hnsw_iterative_scan: str = "relaxed_order"  # off | relaxed_order | strict_order
+
     # ── Observability / limits ─────────────────────────────────────────────
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
