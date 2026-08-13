@@ -68,6 +68,19 @@ class DocumentChunkOut(BaseModel):
     tokens: int = 0
 
 
+class DocumentMetaUpdate(BaseModel):
+    tags: list[str] | None = None
+    doc_date: datetime | None = None
+    author: str | None = Field(None, max_length=256)
+
+
+class DocumentMetaOut(BaseModel):
+    id: str
+    tags: list[str] = Field(default_factory=list)
+    doc_date: datetime | None = None
+    author: str | None = None
+
+
 class ConversationCreate(BaseModel):
     title: str | None = Field(None, max_length=512)
 
