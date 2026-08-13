@@ -81,7 +81,7 @@ async def test_agent_loop_thinks_then_answers(client, require_db):
     ToolGateway.searches = 0
     try:
         with patch("app.api.routes.ask.get_gateway", return_value=ToolGateway()):
-            resp = await client.post("/api/v1/ask", json={"question": "Who wrote The Art of War?", "corpus": corpus})
+            resp = await client.post("/api/v1/ask", json={"question": "Compare Sun Tzu and Machiavelli", "corpus": corpus})
         assert resp.status_code == 200
         events = _parse_sse(resp.text)
         names = [e for e, _ in events]

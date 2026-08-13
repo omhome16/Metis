@@ -16,14 +16,15 @@ from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
 from app.api.routes.conversations import append_message
 from app.cache import cache_lookup, cache_store
+from app.core.logging import get_logger
 from app.core.tracing import flush_tracer, get_tracer, trace_span
 from app.db.models import Conversation, Message
 from app.db.session import get_session
 from app.db.versions import get_corpus_version
 from app.gateway.gateway import get_gateway
-from app.core.logging import get_logger
 from app.rag.embeddings import get_embedder
 from app.rag.pipeline import ask_events
+from app.rag.router import route_question
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["ask"])
@@ -54,6 +55,24 @@ async def _cached_events(entry: dict) -> AsyncIterator[ServerSentEvent]:
 async def ask(request: AskRequest, session: AsyncSession = Depends(get_session)):
     gateway = get_gateway()
     tracer = get_tracer()
+
+    lane = await route_question(
+        request.question,
+        gateway,
+        image=bool(request.image),
+        mode=(request.options or {}).get("mode"),
+    )
+
+    # fast lane: greetings / thanks / trivial — direct chat, zero DB, no cache.
+    if lane == "fast":
+
+        async def fast_stream() -> AsyncIterator[ServerSentEvent]:
+            async for event, data in ask_events(
+                session, gateway, request.question, None, lane="fast"
+            ):
+                yield ServerSentEvent(event=event, data=json.dumps(data))
+
+        return EventSourceResponse(fast_stream())
 
     corpus = request.corpus or "default"
     corpus_version = await get_corpus_version(session, corpus)
@@ -95,9 +114,19 @@ async def ask(request: AskRequest, session: AsyncSession = Depends(get_session))
                 logger.warning("cache lookup error: %s", exc)
 
         if not cached_flag:
-            with trace_span(tracer, "ask", input={"question": request.question, "corpus": request.corpus}) as span:
+            with trace_span(
+                tracer,
+                "ask",
+                input={"question": request.question, "corpus": request.corpus, "lane": lane},
+            ) as span:
                 async for event, data in ask_events(
-                    session, gateway, request.question, request.corpus, image=request.image, history=history
+                    session,
+                    gateway,
+                    request.question,
+                    request.corpus,
+                    image=request.image,
+                    history=history,
+                    lane=lane,
                 ):
                     if event == "sources":
                         collected["sources"] = data

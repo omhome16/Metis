@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     # query; applied as SQL filters on both retrieval arms. Empty on failure.
     metadata_filter: bool = True
 
+    # ── Semantic router (P4) ────────────────────────────────────────────────
+    # true: heuristic lane decision is optionally refined by one LLM call
+    # (task "router"); any failure keeps the heuristic result. false: heuristic only.
+    router_llm: bool = False
+
     # ── Graph extraction (P2 lazy move) ────────────────────────────────────
     # true: LLM typed-relations at ingest; false: regex fallback only (offline build).
     graph_llm_extract: bool = True

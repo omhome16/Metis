@@ -43,10 +43,17 @@ from app.rag.retrieval import (
     vector_search,
 )
 from app.rag.rewrite import rewrite_query
+from app.rag.router import Lane
 
 logger = get_logger(__name__)
 
 _DATA_URL_RE = re.compile(r"^data:(?P<mime>[^;]+);base64,(?P<b64>.+)$", re.S)
+
+_FAST_SYSTEM = {
+    "role": "system",
+    "content": "You are a concise, friendly assistant. Answer briefly and "
+    "conversationally, without mentioning sources, retrieval, or citations.",
+}
 
 
 def parse_image_data_url(data_url: str) -> tuple[str, bytes]:
@@ -177,9 +184,39 @@ async def ask_events(
     corpus: str | None = None,
     image: str | None = None,
     history: list[dict] | None = None,
+    lane: Lane = "standard",
 ) -> AsyncIterator[tuple[str, dict]]:
     answer_id = str(uuid.uuid4())
-    use_agent = getattr(gateway, "supports_tools", False) and not image
+    use_agent = lane == "deep" and getattr(gateway, "supports_tools", False) and not image
+
+    # ── fast lane: direct LLM chat — zero retrieval, zero DB, no cache ─────
+    if lane == "fast":
+        history_msgs = _history_messages(history)
+        messages = [_FAST_SYSTEM, *history_msgs, {"role": "user", "content": question}]
+        prompt_tokens = count_tokens(question)
+        out_tokens = 0
+        text_parts: list[str] = []
+        yield ("sources", {"chunks": []})
+        yield ("meta", {"lane": "fast"})
+        try:
+            async for token in gateway.chat_stream("fast", messages):
+                out_tokens += len(token.split())  # stream chunks may contain several tokens
+                text_parts.append(token)
+                yield ("tokens", {"text": token})
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("fast generation failed: %s", exc)
+            text_parts.append(f"\n[generation failed: {exc}]")
+            yield ("tokens", {"text": f"\n[generation failed: {exc}]"})
+        yield ("citations", {"citations": [], "grounded": False})
+        yield (
+            "done",
+            {
+                "answer_id": answer_id,
+                "usage": {"in": prompt_tokens, "out": out_tokens, "lane": lane},
+                "cost_usd": round(estimate_cost_usd(settings.fast_model, {"in": prompt_tokens, "out": out_tokens}), 6),
+            },
+        )
+        return
 
     # ── retrieval / initial sources ───────────────────────────────────────
     image_hits: list = []
@@ -198,15 +235,21 @@ async def ask_events(
                 for h in image_hits
             ]
         yield ("sources", sources)
+        yield ("meta", {"lane": lane})
     elif use_agent:
         # The agent drives retrieval via its tools — emit an empty placeholder now;
         # the rich, final source list arrives with the answer.
         yield ("sources", {"chunks": [], "agent": True})
+        yield ("meta", {"lane": "deep"})
     else:
-        hits, _rewritten, meta = await retrieve_context(session, gateway, question, corpus)
+        hits, _rewritten, meta = await retrieve_context(
+            session, gateway, question, corpus, config={"graph_boost": lane == "deep"}
+        )
         yield ("sources", _sources_payload(hits))
         if meta:
-            yield ("meta", {"filters": meta})
+            yield ("meta", {"lane": lane, "filters": meta})
+        else:
+            yield ("meta", {"lane": lane})
 
     # ── generation ────────────────────────────────────────────────────────
     out_tokens = 0
@@ -260,7 +303,7 @@ async def ask_events(
             yield ("tokens", {"text": f"\n[generation failed: {exc}]"})
 
     answer = "".join(text_parts)
-    usage = {"in": prompt_tokens, "out": out_tokens}
+    usage = {"in": prompt_tokens, "out": out_tokens, "lane": lane}
 
     # ── citations (grounded) ──────────────────────────────────────────────
     if agent_sources is not None:

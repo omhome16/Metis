@@ -72,7 +72,7 @@ async def test_ask_response_has_corpus_version_header(client, require_db):
         await store_chunks(s, doc_id, ["Hello world."], embeddings)
         await bump_corpus_version(s, corpus)
 
-    r = await client.post("/api/v1/ask", json={"question": "hi", "corpus": corpus})
+    r = await client.post("/api/v1/ask", json={"question": "Who wrote The Art of War?", "corpus": corpus})
     assert r.status_code == 200
     assert "x-metis-corpus-version" in r.headers
 
