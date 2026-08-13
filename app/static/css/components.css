@@ -311,6 +311,14 @@
   background: var(--err-soft);
   color: var(--err);
 }
+.status-badge.ocr {
+  background: var(--warn-soft, #3a3320);
+  color: var(--warn, #d9b45b);
+}
+.status-badge.empty {
+  background: var(--ink-faintest, rgba(127, 127, 127, 0.18));
+  color: var(--ink-faint, #8a8a96);
+}
 
 .doc-card-title {
   font-family: var(--font-display);
@@ -911,6 +919,46 @@
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--ink-faintest);
+}
+.msg-feedback {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.msg-feedback-label {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faintest);
+}
+.thumb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--hairline);
+  background: transparent;
+  color: var(--ink-faint);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.thumb:hover {
+  color: var(--ink);
+  border-color: var(--ink-faint);
+}
+.thumb.up.active {
+  background: var(--ok-soft);
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.thumb.down.active {
+  background: var(--err-soft);
+  border-color: var(--err);
+  color: var(--err);
 }
 .tag {
   display: inline-flex;

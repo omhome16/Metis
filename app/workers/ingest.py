@@ -32,6 +32,28 @@ def extract_text(fmt: str, file_path: str) -> str:
     return ""
 
 
+def _ocr_pdf(file_path: str) -> str:
+    """Rasterize PDF pages (PyMuPDF — pure wheel) and OCR them with pytesseract.
+
+    Only invoked when `settings.ocr_engine == "pytesseract"`; the tesseract
+    binary must be on PATH. Imports stay local so a missing optional package
+    never breaks the worker for non-OCR jobs.
+    """
+    import io
+
+    import pymupdf
+    import pytesseract
+    from PIL import Image
+
+    pages: list[str] = []
+    with pymupdf.open(file_path) as pdf:
+        for page in pdf:
+            pix = page.get_pixmap(dpi=200)
+            img = Image.open(io.BytesIO(pix.tobytes("png")))
+            pages.append(pytesseract.image_to_string(img))
+    return "\n".join(pages)
+
+
 async def process_ingest_job(ctx: dict, job_id: str) -> None:
     """Arq job: extract → chunk → embed → persist chunks → build graph; per-file isolation."""
     embedder = get_embedder()
@@ -73,8 +95,31 @@ async def process_ingest_job(ctx: dict, job_id: str) -> None:
 
 
 async def _process_text(session, gateway, graph, graph_ok, embedder, doc) -> None:
-    """Extract → chunk (flat or parent-child) → embed → store → build document graph."""
+    """Extract → chunk (flat or parent-child) → embed → store → build document graph.
+
+    Zero-text PDFs: OCR them when METIS_OCR_ENGINE=pytesseract, otherwise mark
+    `extraction_status=empty` and log a warning — never silent (P6).
+    """
     text = extract_text(doc.format, doc.file_path or "")
+    if not text.strip() and doc.format == "pdf" and settings.ocr_engine == "pytesseract":
+        try:
+            ocr_text = _ocr_pdf(doc.file_path or "")
+            if ocr_text.strip():
+                text = ocr_text
+                doc.extraction_status = "ocr"
+                logger.info("OCR recovered %d chars for %s", len(ocr_text.strip()), doc.title)
+            else:
+                doc.extraction_status = "empty"
+        except Exception as exc:  # noqa: BLE001 — OCR must never fail the whole job
+            logger.warning("OCR failed for %s (%s): %s", doc.title, doc.file_path, exc)
+            doc.extraction_status = "empty"
+    elif not text.strip():
+        doc.extraction_status = "empty"
+        logger.warning(
+            "no extractable text for %s (%s) — indexing nothing",
+            doc.title,
+            doc.file_path or doc.format,
+        )
     doc.raw_text = text
     await session.commit()
     rows = await _build_chunks(session, embedder, doc, text)

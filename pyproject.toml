@@ -34,6 +34,10 @@ dependencies = [
     "numpy>=2.1",
     # Ingestion
     "pypdf>=5.1",
+    # OCR (P6): pytesseract needs the tesseract binary; pymupdf rasterizes
+    # PDF pages locally (pure wheel — no poppler needed)
+    "pytesseract>=0.3.13",
+    "pymupdf>=1.24",
     # Observability
     "langfuse>=2.45",
     "transformers<5",

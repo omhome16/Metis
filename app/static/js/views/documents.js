@@ -66,6 +66,9 @@ export async function renderDocuments(container, vault) {
         el("div", { class: "doc-card-top" }, [
           el("span", { class: `doc-glyph ${d.format}`, html: icon(glyph, 16) }),
           el("span", { class: `status-badge ${d.status}`, text: d.status }),
+          ...(d.extraction_status && d.extraction_status !== "ok"
+            ? [el("span", { class: `status-badge ${d.extraction_status}`, text: d.extraction_status === "ocr" ? "OCR" : "no text", title: d.extraction_status === "ocr" ? "Text recovered via OCR" : "No extractable text found" })]
+            : []),
         ]),
         el("div", { class: "doc-card-title", text: d.title }),
         el("div", { class: "doc-card-meta", text: meta }),

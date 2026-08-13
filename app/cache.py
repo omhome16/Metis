@@ -133,6 +133,35 @@ async def cache_store(
         logger.warning("cache store failed: %s", exc)
 
 
+async def cache_evict_question(
+    session: AsyncSession, question: str, corpus: str | None = None
+) -> int:
+    """Delete cache entries semantically matching `question` (lookup threshold).
+
+    Used by negative-feedback eviction (P6): thumbs-down on an answer should
+    make the same/similar question miss. Returns rows deleted; never raises.
+    """
+    try:
+        from app.rag.embeddings import get_embedder
+
+        query_embedding = await get_embedder().embed_query(question)
+        stmt = select(CacheEntry).where(CacheEntry.corpus == (corpus or "default"))
+        rows = (await session.execute(stmt)).scalars().all()
+        threshold = settings.cache_similarity_threshold
+        victims = [r for r in rows if _cosine(r.question_embedding, query_embedding) >= threshold]
+        for entry in victims:
+            await session.delete(entry)
+        await session.commit()
+        if victims:
+            logger.info(
+                "cache evict: removed %d entries for corpus=%s", len(victims), corpus or "default"
+            )
+        return len(victims)
+    except Exception as exc:  # noqa: BLE001 — eviction must never break feedback
+        logger.warning("cache evict failed: %s", exc)
+        return 0
+
+
 async def cache_stats(session: AsyncSession) -> dict:
     """Entries (non-expired), hits, misses and hit rate from Postgres counters."""
     try:

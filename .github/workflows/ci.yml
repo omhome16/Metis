@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: metis
+          POSTGRES_PASSWORD: metis
+          POSTGRES_DB: metis
+        ports: ["6433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U metis -d metis"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      cache:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      graph:
+        image: neo4j:5.26-community
+        env:
+          NEO4J_AUTH: neo4j/metis-dev-password
+          NEO4J_PLUGINS: '["graph-data-science"]'
+        ports: ["7687:7687", "7474:7474"]
+        options: >-
+          --health-cmd "wget -qO- http://localhost:7474 >/dev/null 2>&1 || exit 1"
+          --health-interval 10s --health-timeout 5s --health-retries 30
+
+    env:
+      # App defaults already point at these service ports (localhost:6433 / 6379 / 7687).
+      METIS_EMBED_MODEL: mock
+      METIS_RERANK_MODEL: mock
+      METIS_CLIP_MODEL: mock
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Ruff — no NEW violations vs baseline
+        # Repo rule: baseline lint debt may not grow. Lower the number below
+        # as pre-existing violations get cleaned up.
+        run: |
+          uv run ruff check . --output-format=json > /tmp/ruff.json
+          python - <<'EOF'
+          import json
+          n = len(json.load(open("/tmp/ruff.json")))
+          baseline = 283
+          print(f"ruff violations: {n} (baseline {baseline})")
+          if n > baseline:
+              raise SystemExit(f"{n} > {baseline}: no new violations allowed")
+          EOF
+
+      - name: Ruff format — no NEW drift vs baseline
+        run: |
+          uv run ruff format --check . > /tmp/format.txt 2>&1 || true
+          drift=$(grep -oP '^\d+ files would be reformatted' /tmp/format.txt | grep -oP '^\d+')
+          baseline=54
+          echo "format drift: ${drift:-0} (baseline $baseline)"
+          if [ -n "$drift" ] && [ "$drift" -gt "$baseline" ]; then
+            echo "::error::format drift $drift > baseline $baseline — format new files only"
+            exit 1
+          fi
+
+      - name: Tests
+        run: uv run pytest -q
+
+      - name: Eval matrix — tech (thresholds enforced; DBs are up here)
+        run: uv run python -m scripts.run_matrix tech

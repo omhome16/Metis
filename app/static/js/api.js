@@ -53,6 +53,7 @@ export const api = {
   conversations: (name) => request("GET", `/api/v1/vaults/${enc(name)}/conversations`),
   conversation: (id) => request("GET", `/api/v1/conversations/${id}`),
   deleteConversation: (id) => request("DELETE", `/api/v1/conversations/${id}`),
+  feedback: (messageId, data) => request("POST", `/api/v1/ask/${enc(messageId)}/feedback`, { json: data }),
 
   ingest: (corpus, files) => {
     const fd = new FormData();

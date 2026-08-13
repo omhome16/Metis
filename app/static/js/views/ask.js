@@ -171,6 +171,7 @@ export async function renderAsk(container, vault) {
       const detail = await api.conversation(id);
       activeConvId = detail.id;
       history = (detail.messages || []).map((m) => ({
+        id: m.id,
         role: m.role,
         text: m.content,
         sources: m.sources,
@@ -243,6 +244,7 @@ export async function renderAsk(container, vault) {
     if (!streaming) {
       slot.metaRow = buildMetaRow(m);
       bodyEl.append(slot.metaRow);
+      if (m.id) bodyEl.append(buildFeedback(m));
     }
     return msg;
   }
@@ -319,6 +321,28 @@ export async function renderAsk(container, vault) {
     }
     if (m.error) meta.append(el("span", { class: "tag usage", style: "color:var(--err)", text: m.error }));
     return meta;
+  }
+
+  function buildFeedback(m) {
+    const row = el("div", { class: "msg-feedback" });
+    const up = el("button", { class: "thumb up", html: icon("thumbup", 13), title: "Helpful" });
+    const down = el("button", { class: "thumb down", html: icon("thumbdown", 13), title: "Not helpful" });
+    row.append(el("span", { class: "msg-feedback-label", text: "Was this answer helpful?" }), up, down);
+    up.addEventListener("click", () => submitFeedback(m, 1, up, down));
+    down.addEventListener("click", () => submitFeedback(m, -1, up, down));
+    return row;
+  }
+
+  async function submitFeedback(m, rating, upBtn, downBtn) {
+    try {
+      await api.feedback(m.id, { rating });
+      upBtn.classList.toggle("active", rating === 1);
+      downBtn.classList.toggle("active", rating === -1);
+      m.feedback = rating;
+      toast(rating === 1 ? "Marked helpful — thanks." : "Marked not helpful — we'll tune retrieval.");
+    } catch (e) {
+      toast(e.message || "Feedback failed.", "error");
+    }
   }
 
   function buildSourcesCard(m) {
@@ -444,6 +468,7 @@ export async function renderAsk(container, vault) {
           } else if (event === "done") {
             assistantMsg.usage = data;
             assistantMsg.cached = !!data.cached;
+            if (data.message_id) assistantMsg.id = data.message_id;
             if (data.conversation_id && !activeConvId) {
               activeConvId = data.conversation_id;
               loadConversations();
@@ -468,6 +493,7 @@ export async function renderAsk(container, vault) {
         updateText(slot, assistantMsg, false);
         slot.metaRow = buildMetaRow(assistantMsg);
         slot.textEl.closest(".msg-body").append(slot.metaRow);
+        if (assistantMsg.id) slot.textEl.closest(".msg-body").append(buildFeedback(assistantMsg));
       }
       scrollBottom();
     }

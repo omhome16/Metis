@@ -7,24 +7,26 @@ into the pipeline and this exchange is persisted server-side.
 
 import json
 from collections.abc import AsyncIterator
+from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
 from app.api.routes.conversations import append_message
-from app.cache import cache_lookup, cache_store
+from app.cache import cache_evict_question, cache_lookup, cache_store
 from app.core.logging import get_logger
 from app.core.tracing import flush_tracer, get_tracer, trace_span
-from app.db.models import Conversation, Message
+from app.db.models import Conversation, Feedback, Message
 from app.db.session import get_session
 from app.db.versions import get_corpus_version
 from app.gateway.gateway import get_gateway
 from app.rag.embeddings import get_embedder
 from app.rag.pipeline import ask_events
 from app.rag.router import route_question
+from app.schemas.api import FeedbackOut, FeedbackRequest
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["ask"])
@@ -176,7 +178,7 @@ async def ask(request: AskRequest, session: AsyncSession = Depends(get_session))
                 sources = collected.get("sources") if not cached_flag else (cached or {}).get("sources", {"chunks": []})
                 citations = collected.get("citations") if not cached_flag else (cached or {}).get("citations", {})
                 await append_message(session, conv_id, "user", request.question)
-                await append_message(
+                assistant_msg = await append_message(
                     session,
                     conv_id,
                     "assistant",
@@ -187,9 +189,11 @@ async def ask(request: AskRequest, session: AsyncSession = Depends(get_session))
                     error=collected.get("error"),
                     cached=cached_flag,
                 )
-                # surface the conversation id so the frontend can attach follow-ups
+                # surface the conversation id + message id so the frontend can
+                # attach follow-ups and feedback thumbs
                 final_done = dict(done)
                 final_done["conversation_id"] = conv_id
+                final_done["message_id"] = assistant_msg.id
                 final_done["cached"] = cached_flag
                 yield ServerSentEvent(event="done", data=json.dumps(final_done))
         except Exception as exc:  # noqa: BLE001 — history must never break the answer
@@ -199,3 +203,65 @@ async def ask(request: AskRequest, session: AsyncSession = Depends(get_session))
     return EventSourceResponse(
         event_stream(), headers={"X-Metis-Corpus-Version": str(corpus_version)}
     )
+
+
+async def _feedback_context(session: AsyncSession, msg: Message) -> tuple[str | None, str | None]:
+    """Corpus (from the conversation) and the question that preceded this message."""
+    conv = await session.get(Conversation, msg.conversation_id)
+    corpus = conv.vault_name if conv else None
+    if msg.role == "user":
+        return corpus, msg.content
+    prior = (
+        (
+            await session.execute(
+                select(Message)
+                .where(
+                    Message.conversation_id == msg.conversation_id,
+                    Message.role == "user",
+                    Message.id != msg.id,
+                    Message.created_at <= msg.created_at,
+                )
+                .order_by(Message.created_at.desc(), Message.id.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return corpus, prior[0].content if prior else None
+
+
+@router.post("/ask/{message_id}/feedback", response_model=FeedbackOut)
+async def submit_feedback(
+    message_id: str,
+    payload: FeedbackRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> FeedbackOut:
+    """Thumbs on an answer (P6). Negative feedback evicts matching cache entries."""
+    msg = await session.get(Message, message_id)
+    if msg is None:
+        raise HTTPException(status_code=404, detail="message not found")
+    existing = (
+        (await session.execute(select(Feedback).where(Feedback.message_id == message_id)))
+        .scalars()
+        .one_or_none()
+    )
+    if existing is not None:
+        existing.rating = payload.rating
+        existing.note = payload.note
+        row = existing
+    else:
+        row = Feedback(message_id=message_id, rating=payload.rating, note=payload.note)
+        session.add(row)
+    await session.commit()
+
+    if payload.rating < 0:
+        corpus, question = await _feedback_context(session, msg)
+        if question:
+            deleted = await cache_evict_question(session, question, corpus)
+            logger.info(
+                "feedback thumbs-down on message %s — evicted %d cache entries",
+                message_id,
+                deleted,
+            )
+    return FeedbackOut(message_id=message_id, rating=payload.rating, note=payload.note)

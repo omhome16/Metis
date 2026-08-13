@@ -15,6 +15,7 @@ from app.gateway.base import ChatResult, LLMClient, ToolStreamChunk
 from app.gateway.gemini import GeminiProvider
 from app.gateway.groq import GroqProvider
 from app.gateway.mock import MockProvider
+from app.gateway.ollama import OllamaProvider
 
 logger = get_logger(__name__)
 
@@ -59,17 +60,21 @@ class LLMGateway:
             self._clients["groq"] = GroqProvider(self._settings)
         if "gemini" not in self._clients and self._settings.gemini_api_key:
             self._clients["gemini"] = GeminiProvider(self._settings)
+        if "ollama" not in self._clients and self._settings.ollama_model:
+            self._clients["ollama"] = OllamaProvider(self._settings)
 
     # ── provider routing ────────────────────────────────────────────────────
     def _candidates(self, task: str) -> list[LLMClient]:
         preferred = TASK_PROVIDER.get(task, self._settings.primary_provider)
-        others = [p for p in ("groq", "gemini", "mock") if p != preferred]
+        others = [p for p in ("groq", "gemini", "ollama", "mock") if p != preferred]
         order = [preferred, *others]
         return [self._clients[p] for p in order if p in self._clients]
 
     def _model_for(self, provider_name: str, task: str) -> str:
         if provider_name == "groq":
             return self._settings.fast_model if task == "fast" else self._settings.generation_model
+        if provider_name == "ollama":
+            return self._settings.ollama_model
         return self._settings.vision_model  # gemini flash family covers extraction/vision/judge
 
     # ── calls ───────────────────────────────────────────────────────────────

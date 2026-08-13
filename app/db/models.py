@@ -35,6 +35,7 @@ class Document(Base):
     corpus: Mapped[str] = mapped_column(String(128), index=True)
     source_url: Mapped[str | None] = mapped_column(String(1024))
     format: Mapped[str] = mapped_column(String(16))  # pdf | md | txt | image
+    extraction_status: Mapped[str] = mapped_column(String(16), default="ok")  # ok | ocr | empty
     content_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # sha256 → idempotent ingest
     ingest_job_id: Mapped[str | None] = mapped_column(String(36), index=True)
     raw_text: Mapped[str | None] = mapped_column(Text)
@@ -207,4 +208,22 @@ class Message(Base):
     cached: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
-    conversation: Mapped[Conversation] = relationship(back_populates="messages")
+    conversation: Mapped["Conversation"] = relationship(back_populates="messages")
+
+
+class Feedback(Base):
+    """Per-message thumbs (P6): rating -1 | 1, one row per message (latest wins).
+
+    Negative feedback evicts semantically matching cache entries at write time;
+    the log is surfaced through `GET /api/v1/evals/feedback` for eval tooling.
+    """
+
+    __tablename__ = "feedback"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    message_id: Mapped[str] = mapped_column(
+        ForeignKey("messages.id", ondelete="CASCADE"), index=True
+    )
+    rating: Mapped[int] = mapped_column(Integer)  # 1 = thumbs up, -1 = thumbs down
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

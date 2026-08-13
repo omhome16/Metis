@@ -246,6 +246,7 @@ async def vault_documents(name: str, session: AsyncSession = Depends(get_session
                 chunk_count=chunk_count,
                 image_count=image_count,
                 status=status,
+                extraction_status=d.extraction_status,
                 ingested_at=d.ingested_at,
             )
         )
@@ -282,6 +283,7 @@ async def recent_documents(limit: int = Query(12, ge=1, le=100), session: AsyncS
             chunk_count=chunk_counts.get(d.id, 0),
             image_count=image_counts.get(d.id, 0),
             status="indexed" if (chunk_counts.get(d.id, 0) or (d.format == "image" and image_counts.get(d.id))) else "pending",
+            extraction_status=d.extraction_status,
             ingested_at=d.ingested_at,
         )
         for d in docs
@@ -302,7 +304,8 @@ async def document_detail(doc_id: str, session: AsyncSession = Depends(get_sessi
     size = Path(d.file_path).stat().st_size if d.file_path and Path(d.file_path).exists() else 0
     return DocumentSummary(
         id=d.id, title=d.title, corpus=d.corpus, format=d.format, size=size,
-        chunk_count=chunk_count or 0, image_count=image_count or 0, ingested_at=d.ingested_at,
+        chunk_count=chunk_count or 0, image_count=image_count or 0,
+        extraction_status=d.extraction_status, ingested_at=d.ingested_at,
     )
 
 

@@ -42,6 +42,15 @@ class Settings(BaseSettings):
     max_tokens: int = 1024
     request_timeout: float = 60.0
 
+    # ── Local LLM (P6): ollama, OpenAI-compatible endpoint ─────────────────
+    # `ollama_model` empty → provider disabled (mock remains the default
+    # fallback). Set METIS_OLLAMA_TOOLS=true only for models that support
+    # tool calls (llama3.x / qwen3 tool-capable tags).
+    ollama_base_url: str = "http://localhost:11434/v1"
+    ollama_api_key: str = "ollama"
+    ollama_model: str = ""
+    ollama_tools: bool = False
+
     # ── Local models (free, offline) ───────────────────────────────────────
     embed_model: str = "BAAI/bge-m3"
     embed_dim: int = 1024
@@ -83,6 +92,12 @@ class Settings(BaseSettings):
     # ── Global sensemaking (P5) ─────────────────────────────────────────────
     # top-k communities whose summaries feed a deep-lane "global" answer.
     global_relevance_budget: int = 8
+
+    # ── OCR (P6) ────────────────────────────────────────────────────────────
+    # "pytesseract": OCR PDFs with zero extracted text (tesseract binary
+    # required, rasterized locally). "" (default): zero-text PDFs are marked
+    # `extraction_status=empty` + ingest warning — never silent.
+    ocr_engine: str = ""
 
     # ── Graph extraction (P2 lazy move) ────────────────────────────────────
     # true: LLM typed-relations at ingest; false: regex fallback only (offline build).

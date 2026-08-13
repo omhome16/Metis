@@ -1,6 +1,7 @@
 """API request/response schemas."""
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -58,6 +59,7 @@ class DocumentSummary(BaseModel):
     chunk_count: int = 0
     image_count: int = 0
     status: str = "pending"  # indexed | pending | error
+    extraction_status: str = "ok"  # ok | ocr | empty (P6)
     ingested_at: datetime | None = None
 
 
@@ -113,3 +115,25 @@ class ConversationDetail(BaseModel):
     messages: list[MessageOut] = Field(default_factory=list)
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+class FeedbackRequest(BaseModel):
+    rating: Literal[-1, 1]  # 1 = thumbs up, -1 = thumbs down
+    note: str | None = Field(None, max_length=2000)
+
+
+class FeedbackOut(BaseModel):
+    message_id: str
+    rating: int
+    note: str | None = None
+
+
+class FeedbackLogRow(BaseModel):
+    id: str
+    message_id: str
+    rating: int
+    note: str | None = None
+    question: str | None = None
+    answer: str = ""
+    corpus: str | None = None
+    created_at: datetime | None = None
