@@ -232,7 +232,7 @@ export async function renderAsk(container, vault) {
     if (!m.text && streaming) showThinking(slot);
     updateText(slot, m, streaming);
 
-    if (m.sources && (m.sources.chunks?.length || m.sources.images?.length)) {
+    if (m.sources && (m.sources.chunks?.length || m.sources.images?.length || m.sources.communities?.length)) {
       slot.sourcesCard = buildSourcesCard(m);
       bodyEl.append(slot.sourcesCard);
     }
@@ -310,6 +310,7 @@ export async function renderAsk(container, vault) {
 
   function buildMetaRow(m) {
     const meta = el("div", { class: "msg-meta" });
+    if (m.sources?.communities?.length) meta.append(el("span", { class: "tag cached", html: `${icon("network", 10)}<span>global</span>` }));
     if (m.cached) meta.append(el("span", { class: "tag cached", html: `${icon("check", 10)}<span>served from cache</span>` }));
     if (m.usage) {
       const { in: tin = 0, out = 0 } = m.usage;
@@ -323,7 +324,8 @@ export async function renderAsk(container, vault) {
   function buildSourcesCard(m) {
     const chunks = m.sources.chunks || [];
     const images = m.sources.images || [];
-    const total = chunks.length + images.length;
+    const communities = m.sources.communities || [];
+    const total = chunks.length + images.length + communities.length;
     const card = el("div", { class: "sources" });
     const head = el("button", { class: "sources-head", html: `<span>Sources · ${total}</span><span class="chev">${icon("chev-r", 13)}</span>` });
     const bodyEl = el("div", { class: "sources-body" });
@@ -350,6 +352,18 @@ export async function renderAsk(container, vault) {
           el("span", { class: "source-kind", text: "image" }),
         ]),
         el("div", { class: "source-text", text: img.caption })
+      );
+      bodyEl.append(item);
+    });
+    communities.forEach((c, i) => {
+      const item = el("div", { class: "source-item", "data-n": i + 1 });
+      item.append(
+        el("div", { class: "source-item-top" }, [
+          el("span", { class: "source-doc", text: "Community" }),
+          el("span", { class: "source-kind", text: `${c.entity_count} entities` }),
+        ]),
+        el("div", { class: "source-text", text: c.summary }),
+        el("div", { class: "source-tags" }, (c.members || []).slice(0, 6).map((m) => el("span", { class: "tag", text: m })))
       );
       bodyEl.append(item);
     });

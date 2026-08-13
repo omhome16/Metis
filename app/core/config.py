@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     # (task "router"); any failure keeps the heuristic result. false: heuristic only.
     router_llm: bool = False
 
+    # ── Global sensemaking (P5) ─────────────────────────────────────────────
+    # top-k communities whose summaries feed a deep-lane "global" answer.
+    global_relevance_budget: int = 8
+
     # ── Graph extraction (P2 lazy move) ────────────────────────────────────
     # true: LLM typed-relations at ingest; false: regex fallback only (offline build).
     graph_llm_extract: bool = True

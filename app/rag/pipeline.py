@@ -30,6 +30,7 @@ from app.rag.chunking import count_tokens
 from app.rag.contradiction import check_contradiction, parse_citations
 from app.rag.context import assemble_context
 from app.rag.embeddings import get_embedder, get_image_embedder
+from app.rag.global_search import global_answer, global_intent
 from app.rag.metadata import extract_query_metadata
 from app.rag.rerank import get_reranker
 from app.rag.retrieval import (
@@ -217,6 +218,52 @@ async def ask_events(
             },
         )
         return
+
+    # ── global lane: map-reduce over community summaries (P5) ───────────────
+    if lane == "deep" and not image and global_intent(question):
+        global_result = None
+        try:
+            global_result = await global_answer(gateway, question, corpus)
+        except Exception as exc:  # noqa: BLE001 — degrade to deep/standard serving
+            logger.warning("global answer skipped: %s", exc)
+        if global_result is not None:
+            communities = [
+                {
+                    "id": c["id"],
+                    "summary": c["summary"],
+                    "entity_count": c["entity_count"],
+                    "members": c["members"],
+                }
+                for c in global_result["communities"]
+            ]
+            yield ("sources", {"communities": communities})
+            yield ("meta", {"lane": "deep", "mode": "global"})
+            for token in global_result["answer"].split(" "):
+                yield ("tokens", {"text": token + " "})
+            citations = [
+                {
+                    "n": i,
+                    "community_id": c["id"],
+                    "doc": "Community",
+                    "summary": c["summary"][:160],
+                }
+                for i, c in enumerate(global_result["communities"], start=1)
+            ]
+            yield ("citations", {"citations": citations, "grounded": True, "mode": "global"})
+            yield (
+                "done",
+                {
+                    "answer_id": answer_id,
+                    "usage": {
+                        "in": global_result["in"],
+                        "out": global_result["out"],
+                        "lane": lane,
+                        "mode": "global",
+                    },
+                    "cost_usd": global_result["cost_usd"],
+                },
+            )
+            return
 
     # ── retrieval / initial sources ───────────────────────────────────────
     image_hits: list = []

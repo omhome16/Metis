@@ -1027,6 +1027,22 @@
   color: var(--info);
 }
 
+.source-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.source-tags .tag {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  color: var(--ink-faint);
+  font-size: 10.5px;
+}
+
 .contradiction {
   display: flex;
   gap: 10px;
