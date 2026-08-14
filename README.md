@@ -10,6 +10,103 @@ FastAPI (async) · Postgres + pgvector · Neo4j (GDS) · Redis · sentence-trans
 CLIP, bge-reranker) · LLM gateway (Groq + Gemini + ollama, free tiers, per-task overrides) ·
 arq worker · Langfuse.
 
+## Architecture
+
+Two pipelines: **ingest** (documents → chunks + knowledge graph) and **ask**
+(question → cited answer). Postgres+pgvector is the source of truth, Redis is the job
+queue, Neo4j holds the graph. Everything is async — the ask path streams over SSE.
+
+```mermaid
+flowchart LR
+    U[User question] --> R[Semantic router<br/>fast / standard / deep]
+    R -->|fast| CHAT[Greet / chit-chat<br/>no retrieval]
+    R -->|standard / deep| CACHE[(Semantic cache<br/>Postgres, cosine >= 0.92)]
+    CACHE -->|hit| GEN2[Replay cached answer<br/>cached: true]
+    CACHE -->|miss| RW[Query rewrite +<br/>metadata extraction]
+    RW --> HY[Hybrid retrieval<br/>pgvector + FTS, RRF fusion]
+    HY --> GB[Graph boost<br/>entity neighbor chunks]
+    GB --> RR[Cross-encoder rerank<br/>bge-reranker-base]
+    RR --> PA[Parent expansion<br/>small-to-big context]
+    PA --> CTX[assemble_context<br/>numbered sources]
+    CTX --> GEN[Generation / ReAct agent]
+    GEN --> CC[Contradiction scan<br/>top-2 sources]
+    CC --> SSE[SSE stream<br/>sources, thinking, tokens, citations, done]
+    SSE --> CACHE2[(cache_store)]
+```
+
+### Ingest pipeline (`app/workers/ingest.py` — arq job)
+
+1. **Upload** — `POST /ingest` creates document + job rows; the worker polls Redis
+   (`uv run arq app.workers.settings.WorkerSettings`) and runs `process_ingest_job`.
+2. **Extraction** — per file: PDFs via PyMuPDF, plain text, or **OCR fallback**
+   (tesseract, `METIS_OCR_ENGINE=pytesseract`) when a PDF yields no text. Files that
+   still come out empty get `extraction_status=empty` + a UI badge — never silent.
+3. **Chunking** (P3.1 parent-child) — parents ~2000 chars; children (~400 chars,
+   60 overlap) are cut *from* parents. Children are embedded and searched; context
+   blocks come from the parent (small-to-big).
+4. **Embedding** — children embedded with `bge-m3` (local CPU), images with CLIP;
+   rows land in `chunks` / `parent_chunks` / `images`. `content_hash` dedupes
+   re-uploads; `bump_corpus_version` invalidates stale caches.
+5. **Knowledge graph** — LLM entity/relation extraction (lazy toggle
+   `METIS_GRAPH_LLM_EXTRACT`) → Neo4j per-document graph; **GDS community detection**
+   + per-community LLM summaries power the global sensemaking view.
+6. **Progress** — per-file status pollable at `/ingest/{job_id}` (+ SSE stream).
+
+### Ask pipeline (`app/rag/pipeline.py` + friends)
+
+1. **Route** (`app/rag/router.py`) — synchronous heuristic lanes: greetings/trivia →
+   `fast` (no retrieval), comparisons/multi-source → `deep`, else `standard`; optional
+   LLM refine (`METIS_ROUTER_LLM=true`). Never raises — defaults to `standard`.
+2. **Cache check** (`app/cache.py`) — the question is embedded; the nearest
+   `cache_entries` row within cosine ≥ 0.92, corpus-scoped, 7-day TTL and matching
+   `corpus_version` replays the prior answer (UI shows a "cached" badge) — zero LLM calls.
+3. **Retrieval** (`retrieve_context`) — optional LLM query rewrite, metadata-filter
+   extraction (dates/tags), vector search (`<=>` pgvector) + keyword FTS fused with
+   RRF; **graph boost** adds entity-neighbor chunks (2 hops, ≤10); cross-encoder
+   rerank (`bge-reranker-base`, top 5); **parent expansion** resolves children → parents.
+4. **Context assembly** (`app/rag/context.py`) — numbered sources; the model must cite `[n]`.
+5. **Generation** — ReAct agent (`app/rag/agent.py`) when the provider supports tool
+   calling (the model itself calls `search_vault` / `graph_lookup` / `wikipedia`);
+   otherwise the direct path. Any failure degrades to direct retrieval → context →
+   generation — never an empty reply.
+6. **Contradiction scan** (`app/rag/contradiction.py`) — the top-2 chunks are checked
+   against Neo4j's persisted contradiction edges; new pairs get an LLM verdict.
+   Conflicts surface as a "sources disagree" alert.
+7. **SSE stream** — `sources → thinking → tokens → citations → done`; answers +
+   sources persisted per conversation.
+8. **Feedback** (P6) — thumbs-down re-embeds the question and **evicts semantically
+   matching cache entries**, so the same/similar question must be answered fresh.
+
+### LLM gateway (`app/gateway/`)
+
+Providers: Groq, Gemini, ollama (OpenAI-compatible), and a deterministic MockProvider
+for no-key dev and tests. Tasks route per provider (`generation→groq`,
+`judge/extraction→gemini`) with per-task overrides (`METIS_JUDGE_PROVIDER` /
+`METIS_EXTRACTION_PROVIDER`); each call walks a fallback chain and never splices
+mid-stream failures. Structured JSON-schema calls per task; per-request cost estimates.
+
+### Eval & CI
+
+Golden datasets (`app/evals/datasets.py`) → harness (`app/evals/runner.py`) →
+RAGAS-style metrics; `scripts/run_matrix.py` drives the config matrix; CI gates the
+default config (faithfulness ≥ 0.90, context_precision ≥ 0.80, citation_correctness
+== 1.0). See Measured results below.
+
+### Repository layout
+
+```text
+app/
+  api/routes/     one router per endpoint group (/api/v1)
+  gateway/        provider clients + task routing (groq/gemini/ollama/mock)
+  rag/            router, retrieval, rerank, context, agent, contradiction, vision
+  graph/          Neo4j store, extraction, communities (GDS)
+  evals/          golden datasets, metrics, runner
+  workers/        arq ingest job
+  static/         dependency-free vanilla-JS SPA (served at /)
+scripts/          run_matrix, frontend_qa
+tests/            pytest suite — mock models/LLMs, DB-gated fixtures
+```
+
 ## Quickstart
 
 ```bash
