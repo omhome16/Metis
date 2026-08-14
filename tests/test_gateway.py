@@ -6,7 +6,7 @@ from app.gateway.gateway import LLMGateway, estimate_cost_usd
 
 
 def _settings(**overrides) -> Settings:
-    return Settings(**{"groq_api_key": "", "gemini_api_key": "", **overrides})
+    return Settings(**{"groq_api_key": "", "gemini_api_key": "", "ollama_model": "", **overrides})
 
 
 async def test_mock_chat():
@@ -25,9 +25,40 @@ async def test_mock_chat_stream():
 
 async def test_mock_structured_entities():
     gw = LLMGateway(_settings())
-    result = await gw.structured("extraction", [{"role": "user", "content": "extract entities from text"}], {})
+    result = await gw.structured(
+        "extraction", [{"role": "user", "content": "extract entities from text"}], {}
+    )
     assert "entities" in result
     assert result["entities"][0]["name"]
+
+
+async def test_judge_provider_override_routes_to_groq():
+    calls: list[tuple] = []
+
+    class RecordingProvider(LLMClient):
+        name = "groq"
+
+        async def chat(self, *args, **kwargs):
+            calls.append(("chat", args, kwargs))
+            return None  # pragma: no cover
+
+        async def chat_stream(self, *args, **kwargs):
+            calls.append(("stream", args, kwargs))
+            return  # pragma: no cover
+
+        async def structured(self, messages, model, json_schema):
+            calls.append(("structured", model))
+            return {"ok": True}
+
+    gw = LLMGateway(
+        _settings(judge_provider="groq", extraction_provider="gemini"),
+        clients={"groq": RecordingProvider()},
+    )
+    out = await gw.structured("judge", [{"role": "user", "content": "score this"}], {})
+    assert out == {"ok": True}
+    assert calls[0][0] == "structured"
+    assert calls[0][1] == "llama-3.3-70b-versatile"  # groq model, not vision_model
+    assert "gemini" not in [c[0] for c in calls]
 
 
 class FailingProvider(LLMClient):
@@ -51,13 +82,18 @@ async def test_fallback_chain_when_primary_fails():
 
 
 async def test_all_providers_fail_raises():
-    gw = LLMGateway(_settings(primary_provider="groq"), clients={"groq": FailingProvider(), "mock": FailingProvider()})
+    gw = LLMGateway(
+        _settings(primary_provider="groq"),
+        clients={"groq": FailingProvider(), "mock": FailingProvider()},
+    )
     with pytest.raises(RuntimeError):
         await gw.chat("generation", [{"role": "user", "content": "hello"}])
 
 
 def test_estimate_cost():
-    assert estimate_cost_usd("llama-3.3-70b-versatile", {"in": 1_000_000, "out": 0}) == pytest.approx(0.59)
+    assert estimate_cost_usd(
+        "llama-3.3-70b-versatile", {"in": 1_000_000, "out": 0}
+    ) == pytest.approx(0.59)
     assert estimate_cost_usd("unknown-model", {"in": 100, "out": 100}) == 0.0
 
 

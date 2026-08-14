@@ -5,9 +5,15 @@ Usage: uv run python -m scripts.run_matrix tech   (or Philosophy)
 Each config in `CONFIGS` is passed to the retrieval pipeline as an eval override
 (see `retrieve_context(..., config=...)` in app/rag/pipeline.py).
 
-Thresholds (P6): enforced when Postgres is reachable, skipped otherwise
-(skip-if-down semantics — the CI job starts DBs via compose services, so a
-green PR must meet them there). Exits non-zero on any breach.
+Thresholds (P6): enforced when Postgres is reachable and the dataset's corpus
+is ingested, skipped otherwise (skip-if-down semantics — the CI job starts DBs
+via compose services, so a green PR must meet them there once the corpus is
+seeded). Exits non-zero on any breach.
+
+Gating (P7): only the default product config (`gated=True`) fails the PR.
+The other rows are *comparison* configs — flat/parent-child-off/metadata-off
+are intentionally worse by design, so thresholds on them would fail every PR.
+They still print with the same columns for the README table.
 """
 
 import asyncio
@@ -26,7 +32,14 @@ THRESHOLDS = {
 }
 
 CONFIGS = [
-    {"name": "hybrid+rerank+graph", "rerank_enabled": True, "graph_boost": True, "top_k_rerank": 5},
+    # Default product config — the CI gate. Keep this above THRESHOLDS.
+    {
+        "name": "hybrid+rerank+graph",
+        "rerank_enabled": True,
+        "graph_boost": True,
+        "top_k_rerank": 5,
+        "gated": True,
+    },
     {"name": "hybrid only", "rerank_enabled": False, "graph_boost": False, "top_k_rerank": 10},
     {
         "name": "rerank only (no graph)",
@@ -61,37 +74,54 @@ CONFIGS = [
 ]
 
 
-def _db_reachable() -> bool:
+async def _db_reachable() -> bool:
     import asyncpg
 
-    async def _probe() -> bool:
-        try:
-            dsn = settings.db_url.replace("postgresql+asyncpg://", "postgresql://")
-            conn = await asyncpg.connect(dsn, timeout=3)
-            await conn.close()
-            return True
-        except Exception:
-            return False
-
     try:
-        return asyncio.run(_probe())
+        dsn = settings.db_url.replace("postgresql+asyncpg://", "postgresql://")
+        conn = await asyncpg.connect(dsn, timeout=3)
+        await conn.close()
+        return True
     except Exception:
         return False
 
 
+async def _corpus_seeded(session, corpus: str) -> bool:
+    from sqlalchemy import text
+
+    row = (
+        await session.execute(
+            text(
+                "SELECT COUNT(*) FROM chunks c JOIN documents d ON d.id = c.doc_id "
+                "WHERE d.corpus = :cid"
+            ),
+            {"cid": corpus},
+        )
+    ).first()
+    return bool(row and row[0] > 0)
+
+
 async def main() -> None:
     setup_logging("INFO")
-    if not _db_reachable():
+    if not await _db_reachable():
         print("Postgres not reachable — skipping matrix (thresholds not enforced).")
         return
     dataset_id = sys.argv[1] if len(sys.argv) > 1 else "tech"
-    print(f"=== METIS eval matrix — dataset '{dataset_id}' ===\n")
     failures: list[tuple[str, str, float | None, float]] = []
     async with async_session_factory() as session:
+        if not await _corpus_seeded(session, dataset_id):
+            print(
+                f"corpus for dataset '{dataset_id}' not ingested — "
+                "skipping matrix (thresholds not enforced)."
+            )
+            return
         gateway = get_gateway()
         for cfg in CONFIGS:
             report = await run_eval(
-                session, gateway, dataset_id, {k: v for k, v in cfg.items() if k != "name"}
+                session,
+                gateway,
+                dataset_id,
+                {k: v for k, v in cfg.items() if k not in ("name", "gated")},
             )
             m = report["metrics"]
             line = (
@@ -101,6 +131,9 @@ async def main() -> None:
                 f"cite={m['citation_correctness']:.3f} "
                 f"p50={m['latency_p50']}s cost=${m['cost_total_usd']}"
             )
+            if not cfg.get("gated"):
+                print(line + "  (comparison — not gated)")
+                continue
             for metric, threshold in THRESHOLDS.items():
                 value = m.get(metric)
                 if value is None or value < threshold:

@@ -6,8 +6,9 @@
 
 ## Stack
 
-FastAPI (async) · Postgres + pgvector · Neo4j · Redis · sentence-transformers (bge-m3, CLIP,
-bge-reranker) · LLM gateway (Groq + Gemini, free tiers) · arq worker · Langfuse.
+FastAPI (async) · Postgres + pgvector · Neo4j (GDS) · Redis · sentence-transformers (bge-m3,
+CLIP, bge-reranker) · LLM gateway (Groq + Gemini + ollama, free tiers, per-task overrides) ·
+arq worker · Langfuse.
 
 ## Quickstart
 
@@ -22,7 +23,14 @@ cp .env.example .env   # add GROQ_API_KEY / GEMINI_API_KEY
 # 3. Migrations + dev server
 uv run alembic upgrade head
 uv run uvicorn app.main:app --reload
+
+# 4. Ingest worker (required — /ingest jobs never run without it)
+uv run arq app.workers.settings.WorkerSettings
 ```
+
+No API keys? Everything runs on the built-in mock provider; a local ollama model can be
+substituted per task via `METIS_JUDGE_PROVIDER` / `METIS_EXTRACTION_PROVIDER` /
+`METIS_PRIMARY_PROVIDER` (see `.env.example` and `docs/deployment.md`).
 
 ## Frontend
 
@@ -30,15 +38,20 @@ A hand-built, dependency-free single-page app served by FastAPI at `/` (no build
 vanilla ES modules + CSS custom properties).
 
 - **Vaults** — named libraries (`/vaults` API). Each vault holds its documents, its own
-  knowledge graph, and a chat grounded in that vault's sources.
+  knowledge graph, and a chat grounded in that vault's sources. Ingest reports per-file
+  status, including OCR (`ocr`) and empty-document (`empty`) badges instead of silent gaps.
 - **Documents** — library grid with per-file status, drag-and-drop upload with live job
   progress, and a detail view (raw content, chunk list, original file).
 - **Graph** — a bespoke canvas force-directed renderer: drag nodes, scroll to zoom,
   click an entity to expand its neighborhood, search to focus. No graph library — the
-  physics and rendering are ~300 lines of first-party code.
+  physics and rendering are ~300 lines of first-party code. Communities (P5): GDS
+  community detection + per-community LLM summaries power a "global" sensemaking view.
 - **Ask** — SSE chat with token streaming, markdown answers, clickable citation chips,
   scored source cards, contradiction alerts, image attach, and a semantic-cache replay
-  badge.
+  badge. A semantic router picks a fast/standard/deep lane per question (label shown in
+  the UI); parent-child chunking keeps retrieval precise while the model reads full
+  parent passages. **Thumbs up/down** on any answer: thumbs-down evicts the matching
+  cache entries so a bad answer is never replayed.
 - **ReAct agent** — when the LLM provider supports function calling, the chat runs a
   tool-augmented reasoning loop: the model itself searches the vault, expands the
   knowledge graph, and checks background references before answering. The frontend
@@ -79,6 +92,9 @@ uv run python scripts/frontend_qa.py
 | `/vaults/{name}/conversations` | GET/POST | List / create conversations for a vault |
 | `/conversations/{id}` | GET/PATCH/DELETE | Conversation detail, rename, delete |
 | `/conversations/{id}/messages` | GET | Message history for a conversation |
+| `/ask/{message_id}/feedback` | POST | Rate an answer (`-1`/`1`); `-1` evicts matching semantic-cache entries |
+| `/evals/feedback` | GET | Feedback log (ratings joined with conversations) |
+| `/vaults/{name}/graph` | GET | Vault graph stats + communities (GDS) |
 | `/search` | GET | Raw hybrid search |
 | `/graph/explore` | GET | Subgraph around an entity |
 | `/graph/connections` | GET | Path between two entities |
@@ -101,21 +117,29 @@ uv run pytest
 
 The eval harness (`/evals/run`, `scripts/run_matrix.py`) scores the retrieval pipeline
 against golden datasets with RAGAS-style LLM-judged metrics. Numbers below are from
-real runs (Groq `llama-3.3-70b` generation + Gemini Flash judges, local CPU embeddings),
-single pass per config.
+real runs on the current parent-child corpus (Groq `llama-3.3-70b` generation + judges,
+local CPU embeddings, single pass per config, 2026-08-14).
 
 ### tech (`fastapi-notes` corpus, 4 questions)
 
 | Config | Faithfulness | Answer relevancy | Context precision | Context recall | Citations | p50 latency |
-|---|---|---|---|---|---|---|---|
-| hybrid + rerank + graph | **1.000** | 0.822 | **0.875** | **1.000** | 1.000 | 2.19s |
-| hybrid only | **1.000** | **0.878** | 0.750 | **1.000** | 1.000 | 0.77s |
-| rerank only (no graph) | **1.000** | 0.860 | **0.875** | **1.000** | 1.000 | 1.11s |
+|---|---|---|---|---|---|---|
+| hybrid + rerank + graph | **1.000** | 0.829 | **1.000** | **1.000** | **1.000** | 2.50s |
+| hybrid only | 1.000 | 0.883 | 0.000* | 0.750 | 0.000* | 6.03s |
+| rerank only (no graph) | 1.000 | 0.845 | 0.000* | 0.750 | 0.000* | 5.80s |
+| parent-child | 0.854 | 0.793 | **1.000** | **1.000** | **1.000** | 9.42s |
+| flat (no parent-child) | 0.688 | 0.889 | 0.563 | 0.750 | 0.500 | 18.53s |
+| metadata filter off | 0.938 | 0.873 | **1.000** | **1.000** | **1.000** | 7.07s |
+
+\* `hybrid only` / `rerank only (no graph)` hit the Groq free-tier daily token limit
+during that pass and fell back to the mock provider — the zeros are quota artifacts,
+not pipeline behavior. Re-run these rows after the daily token window resets
+(`uv run python -m scripts.run_matrix tech`).
 
 ### Philosophy (10-document corpus, 5 questions)
 
 | Config | Faithfulness | Answer relevancy | Context precision | Context recall | Citations | p50 latency |
-|---|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|
 | hybrid + rerank + graph | 0.200 | 0.615 | 0.848 | 0.800 | 1.000 | 20.3s |
 
 Notes:
@@ -126,8 +150,14 @@ Notes:
   stayed recall-perfect at 0.800 with 1.000 citation correctness.
 - Metrics are LLM-judged, so expect ±0.05–0.1 variance between runs; latency
   includes CPU embedding + generation.
-- Corpus sizes differ heavily: `tech` = 1 doc / 3 chunks, `Philosophy` = 10 texts /
-  6,754 chunks — the ~20x latency gap is mostly retrieval over the big corpus.
+- Corpus sizes differ heavily: `tech` = 1 doc / 4 chunks (parent-child), `Philosophy`
+  = 10 texts / ~6,800 chunks — the ~8x latency gap is mostly retrieval over the
+  big corpus.
+- `parent-child` vs `flat` is the P3.1 small-to-big comparison: resolving children
+  to their parents recovers citation correctness (0.500 → 1.000) at the cost of
+  latency (18.5s → 9.4s context assembly + larger windows).
 
 Reproduce with `uv run python -m scripts.run_matrix tech` (or `Philosophy`).
-`eval_runs` are persisted and browsable at `/evals/reports`.
+`eval_runs` are persisted and browsable at `/evals/reports`. Only the default
+config (`hybrid+rerank+graph`) is gated in CI; the other rows are comparison
+configs that are intentionally worse by design (see `scripts/run_matrix.py`).

@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     # NOTE: gemini-2.5-flash was retired for new API accounts — use the live flash alias.
     vision_model: str = "gemini-flash-latest"
     extraction_model: str = "gemini-flash-latest"
+    # Task providers are overridable per task — e.g. route judge/extraction to
+    # groq when the Gemini free tier is rate-limited (METIS_JUDGE_PROVIDER /
+    # METIS_EXTRACTION_PROVIDER). Values: groq | gemini | ollama.
+    judge_provider: str = "gemini"
+    extraction_provider: str = "gemini"
     max_tokens: int = 1024
     request_timeout: float = 60.0
 

@@ -14,25 +14,31 @@ uv run arq app.workers.settings.WorkerSettings   # ingest worker — required or
 uv run pytest
 uv run ruff check . && uv run ruff format --check .
 uv run python scripts/frontend_qa.py   # Playwright UI check; expects server on :8011 (default) — start `uv run uvicorn app.main:app --port 8011` or pass a URL; needs `uv run playwright install chromium` once
-uv run python -m scripts.run_matrix tech   # (or "arts") config-matrix eval
+uv run python -m scripts.run_matrix tech   # (or "Philosophy") config-matrix eval with thresholds (see CI)
 ```
 
 Until a DB is up, pytest auto-skips Postgres/Redis/Neo4j tests (`require_db`/`require_redis`/`require_graph` fixtures). There is no typecheck step — `ruff check` is the only lint gate.
 
+## CI (.github/workflows/ci.yml)
+
+`uv sync --frozen` → `ruff check` (violation count must stay ≤ 283) → `ruff format --check` (drift ≤ 54) → `pytest` → `run_matrix tech`. The workflow starts Postgres/Redis/Neo4j as compose services. `run_matrix` enforces thresholds only when Postgres is reachable AND the dataset's corpus is ingested (skip-if-down/empty — a fresh CI DB has no chunks, so seed the corpus there before relying on the gate): faithfulness ≥ 0.90, context_precision ≥ 0.80, citation_correctness == 1.0; exits 1 on any breach or when a judge score is unavailable. Only the default config (`hybrid+rerank+graph`) is gated; the other matrix rows are comparison configs that are intentionally worse by design. Keep the ruff/format baselines in the workflow in sync with reality — bump them deliberately, not to mask regressions.
+
 ## Architecture
 
-- `app/api/routes/` — one router file per endpoint group; wired in `app/main.py` under `/api/v1`.
-- `app/gateway/` — LLM provider abstraction (Groq, Gemini, mock). No API keys → MockProvider fallback; most tests run entirely on the mock.
-- `app/rag/` — chunking → embeddings → hybrid retrieval → rerank → context → `agent.py` (ReAct loop). `app/graph/` is the Neo4j store/extraction; `app/evals/` has golden datasets + metrics; `app/workers/ingest.py` is the arq job.
+- `app/api/routes/` — one router file per endpoint group; wired in `app/main.py` under `/api/v1`. Includes `POST /ask/{message_id}/feedback` (negative feedback evicts matching semantic-cache entries) and `GET /evals/feedback`.
+- `app/gateway/` — LLM provider abstraction (Groq, Gemini, ollama, mock). No API keys → MockProvider fallback; most tests run entirely on the mock. Task routing is per-task (`generation→groq`, `extraction/judge→gemini`) with per-task overrides `METIS_JUDGE_PROVIDER` / `METIS_EXTRACTION_PROVIDER`.
+- `app/rag/` — chunking (parent-child: parents ~2k chars, children cut from parents) → embeddings → hybrid retrieval → rerank → context → `agent.py` (ReAct loop). `app/graph/` is the Neo4j store/extraction + community detection (`communities.py`); `app/evals/` has golden datasets + metrics; `app/workers/ingest.py` is the arq job.
 - Migrations: alembic (async, `alembic/env.py` reads `settings.db_url`). Add a numbered migration for any schema change; models register via `import app.db.models` in env.py.
 
 ## Env gotchas
 
 - LLM API keys use their **canonical unprefixed names** (`GROQ_API_KEY`, `GEMINI_API_KEY`); every other setting is `METIS_` prefixed (`app/core/config.py`). Setting `METIS_GROQ_API_KEY` silently does nothing.
-- `.env`, `demo/`, `uploads/`, model caches are gitignored runtime data — don't commit them.
+- `.env`, `demo/`, `uploads/`, `learning doc/`, model caches are gitignored runtime data — don't commit them.
 - Embeddings/rerank/CLIP run locally on CPU; `pyproject.toml` pins torch/torchvision to the cpu PyTorch index. Don't drop those overrides unless CUDA is intended.
 - `transformers`/`sentence-transformers` are pinned `<5` (`4.57.6`/`4.1.0`): 5.x crashes fresh processes (0xC0000005) loading bge-m3. Don't "upgrade" them.
 - The frontend QA script runs against the server on `:8011` by default (not :8000).
+- Groq/Gemini free tiers exhaust fast (Groq ~100k tokens/day, Gemini flash ~20 req/day): when rate-limited, route `judge`/`extraction` to another provider via `METIS_JUDGE_PROVIDER`/`METIS_EXTRACTION_PROVIDER` (e.g. `groq` or a local `ollama` model). `OllamaProvider.structured` works only if the prompt mentions "json" — it injects a hint when absent; don't remove that.
+- OCR (`METIS_OCR_ENGINE=pytesseract`) needs the **tesseract binary** on PATH (`apt-get install tesseract-ocr` / tesseract-ocr.win64), not just the Python wheel.
 
 ## Testing
 

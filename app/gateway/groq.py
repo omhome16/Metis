@@ -6,8 +6,8 @@ from collections.abc import AsyncIterator
 from openai import AsyncOpenAI
 
 from app.core.config import Settings
-from app.gateway.base import ChatResult, LLMClient, ToolStreamChunk, parse_tool_call_deltas
 from app.core.logging import get_logger
+from app.gateway.base import ChatResult, LLMClient, ToolStreamChunk, parse_tool_call_deltas
 
 logger = get_logger(__name__)
 
@@ -48,7 +48,11 @@ class GroqProvider(LLMClient):
         max_tokens: int = 1024,
     ) -> AsyncIterator[str]:
         stream = await self._client.chat.completions.create(
-            model=model, messages=messages, temperature=temperature, max_tokens=max_tokens, stream=True
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
         )
         async for chunk in stream:
             if chunk.choices:
@@ -57,9 +61,14 @@ class GroqProvider(LLMClient):
                     yield delta
 
     async def structured(self, messages: list[dict], model: str, json_schema: dict) -> dict:
+        # Groq requires the word "json" somewhere in the prompt when
+        # response_format=json_object is set — inject a hint if absent.
+        msgs = list(messages)
+        if not any("json" in str(m.get("content", "")).lower() for m in msgs):
+            msgs.append({"role": "user", "content": "Respond in JSON."})
         resp = await self._client.chat.completions.create(
             model=model,
-            messages=messages,
+            messages=msgs,
             temperature=0,
             max_tokens=1024,
             response_format={"type": "json_object"},
@@ -67,7 +76,9 @@ class GroqProvider(LLMClient):
         try:
             return json.loads(resp.choices[0].message.content or "{}")
         except json.JSONDecodeError:
-            logger.warning("structured response was not valid JSON: %r", resp.choices[0].message.content[:200])
+            logger.warning(
+                "structured response was not valid JSON: %r", resp.choices[0].message.content[:200]
+            )
             return {}
 
     async def chat_tools_stream(

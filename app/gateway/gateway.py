@@ -29,6 +29,7 @@ def _is_retryable(exc: Exception) -> bool:
         return status in (429,) or status >= 500
     return isinstance(exc, (TimeoutError, ConnectionError, OSError))
 
+
 # task → preferred provider
 TASK_PROVIDER: dict[str, str] = {
     "generation": "groq",
@@ -52,7 +53,9 @@ def estimate_cost_usd(model: str, usage: dict) -> float:
 
 
 class LLMGateway:
-    def __init__(self, settings: Settings | None = None, clients: dict[str, LLMClient] | None = None):
+    def __init__(
+        self, settings: Settings | None = None, clients: dict[str, LLMClient] | None = None
+    ):
         self._settings = settings or get_settings()
         self._clients: dict[str, LLMClient] = dict(clients or {})
         self._clients.setdefault("mock", MockProvider())
@@ -64,8 +67,15 @@ class LLMGateway:
             self._clients["ollama"] = OllamaProvider(self._settings)
 
     # ── provider routing ────────────────────────────────────────────────────
+    def _preferred_provider(self, task: str) -> str:
+        override = {
+            "judge": self._settings.judge_provider,
+            "extraction": self._settings.extraction_provider,
+        }.get(task)
+        return override or TASK_PROVIDER.get(task, self._settings.primary_provider)
+
     def _candidates(self, task: str) -> list[LLMClient]:
-        preferred = TASK_PROVIDER.get(task, self._settings.primary_provider)
+        preferred = self._preferred_provider(task)
         others = [p for p in ("groq", "gemini", "ollama", "mock") if p != preferred]
         order = [preferred, *others]
         return [self._clients[p] for p in order if p in self._clients]
@@ -103,7 +113,11 @@ class LLMGateway:
         for client in self._candidates(task):
             try:
                 result = await self._call_with_retry(
-                    client.chat, messages, self._model_for(client.name, task), temperature, max_tokens
+                    client.chat,
+                    messages,
+                    self._model_for(client.name, task),
+                    temperature,
+                    max_tokens,
                 )
                 return result
             except Exception as exc:  # noqa: BLE001 — any failure falls through the chain
@@ -123,14 +137,21 @@ class LLMGateway:
         for client in self._candidates(task):
             started = False
             try:
-                async for token in client.chat_stream(messages, self._model_for(client.name, task), temperature, max_tokens):
+                async for token in client.chat_stream(
+                    messages, self._model_for(client.name, task), temperature, max_tokens
+                ):
                     started = True
                     yield token
                 return
             except Exception as exc:  # noqa: BLE001
                 if started:
                     # never splice a partial answer onto a fallback provider's output
-                    logger.error("stream provider %s failed mid-stream for task %s: %s", client.name, task, exc)
+                    logger.error(
+                        "stream provider %s failed mid-stream for task %s: %s",
+                        client.name,
+                        task,
+                        exc,
+                    )
                     raise
                 errors.append(f"{client.name}: {exc}")
                 logger.warning("stream provider %s failed for task %s: %s", client.name, task, exc)
@@ -145,8 +166,12 @@ class LLMGateway:
                 )
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{client.name}: {exc}")
-                logger.warning("structured provider %s failed for task %s: %s", client.name, task, exc)
-        raise RuntimeError(f"all LLM providers failed for structured task '{task}': {' | '.join(errors)}")
+                logger.warning(
+                    "structured provider %s failed for task %s: %s", client.name, task, exc
+                )
+        raise RuntimeError(
+            f"all LLM providers failed for structured task '{task}': {' | '.join(errors)}"
+        )
 
     @property
     def supports_tools(self) -> bool:
@@ -178,13 +203,22 @@ class LLMGateway:
                 return
             except Exception as exc:  # noqa: BLE001
                 if started:
-                    logger.error("tool stream provider %s failed mid-stream for task %s: %s", client.name, task, exc)
+                    logger.error(
+                        "tool stream provider %s failed mid-stream for task %s: %s",
+                        client.name,
+                        task,
+                        exc,
+                    )
                     raise
                 errors.append(f"{client.name}: {exc}")
-                logger.warning("tool stream provider %s failed for task %s: %s", client.name, task, exc)
+                logger.warning(
+                    "tool stream provider %s failed for task %s: %s", client.name, task, exc
+                )
         raise RuntimeError(f"tool-calling unavailable for task '{task}': {' | '.join(errors)}")
 
-    async def describe_image(self, image_b64: str, prompt: str, mime_type: str = "image/png") -> str:
+    async def describe_image(
+        self, image_b64: str, prompt: str, mime_type: str = "image/png"
+    ) -> str:
         errors: list[str] = []
         for client in self._candidates("vision"):
             try:
