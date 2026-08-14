@@ -98,6 +98,15 @@ async def retrieve_context(
     if metadata_filter:
         try:
             meta = await extract_query_metadata(gateway, rewritten)
+            if meta.get("tags"):
+                tagged = await _corpus_has_tags(session, corpus, meta["tags"])
+                if not tagged:
+                    logger.info(
+                        "metadata filter: no docs in corpus %r carry tags %s — dropping tag filter",
+                        corpus,
+                        meta["tags"],
+                    )
+                    meta.pop("tags")
         except Exception as exc:  # noqa: BLE001
             logger.warning("metadata filter skipped: %s", exc)
 
@@ -134,6 +143,17 @@ async def retrieve_context(
             logger.warning("parent expansion skipped: %s", exc)
 
     return hits, rewritten, meta
+
+
+async def _corpus_has_tags(session, corpus: str | None, tags: list[str]) -> bool:
+    """True if any doc in `corpus` carries at least one of `tags` (array overlap)."""
+    from sqlalchemy import text
+
+    row = (await session.execute(
+        text("SELECT 1 FROM documents WHERE corpus = :c AND tags && :tags LIMIT 1"),
+        {"c": corpus or "default", "tags": tags},
+    )).first()
+    return row is not None
 
 
 async def contradiction_scan(

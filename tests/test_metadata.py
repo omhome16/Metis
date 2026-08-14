@@ -183,3 +183,40 @@ async def test_meta_filters_empty_meta_passthrough(require_db):
         assert len(hits) == 2  # no filter → both docs
 
     await _cleanup(corpus)
+
+
+async def test_pipeline_drops_invented_tag_filter(require_db):
+    """LLM-invented tags must not zero out retrieval on untagged corpora."""
+    from app.rag.pipeline import retrieve_context
+
+    corpus = f"test-meta-drop-{uuid.uuid4().hex[:8]}"
+    embedder = get_embedder()
+    async with async_session_factory() as session:
+        doc = Document(
+            id=str(uuid.uuid4()),
+            title="untagged notes",
+            corpus=corpus,
+            format="txt",
+            content_hash=uuid.uuid4().hex,
+            tags=[],  # untagged — invented tag filters must be dropped
+            raw_text="fastapi code notes",
+        )
+        session.add(doc)
+        await session.commit()
+        embeddings = await embedder.embed_texts([doc.raw_text or ""])
+        await store_chunks(session, doc.id, [doc.raw_text or ""], embeddings)
+    gateway = _StructuredGateway(
+        {"tags": ["fastapi", "database", "management", "system"]}
+    )
+    async with async_session_factory() as session:
+        hits, _rewritten, meta = await retrieve_context(
+            session,
+            gateway,
+            "what is fastapi?",
+            corpus,
+            config={"graph_boost": False, "metadata_filter": True},
+        )
+        assert "tags" not in meta  # dropped — nothing in the corpus carries them
+        assert len(hits) >= 1
+
+    await _cleanup(corpus)
