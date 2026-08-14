@@ -1,6 +1,6 @@
 """SQLAlchemy ORM models for METIS (Postgres + pgvector).
 
-Schema mirrors `metis-blueprint.md` §6. Embedding columns use the variable-length
+Schema mirrors `docs/architecture.md` §4. Embedding columns use the variable-length
 `vector` type so the model dimension is config-driven (METIS_EMBED_DIM) at runtime.
 """
 
