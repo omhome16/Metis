@@ -39,7 +39,7 @@ def assemble_context(
     blocks: list[str] = []
     citations: list[dict] = []
     tokens_used = 0
-    budget = 6000  # max context tokens for retrieved chunks (blueprint §9)
+    budget = 6000  # max context chars for retrieved chunks (~1500 tokens; count_tokens is chars/4)
 
     for n, hit in enumerate(hits, start=1):
         block = f"[{n}] ({hit.doc_title}) {hit.chunk.text.strip()}"

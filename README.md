@@ -256,5 +256,6 @@ Notes:
 
 Reproduce with `uv run python -m scripts.run_matrix tech` (or `Philosophy`).
 `eval_runs` are persisted and browsable at `/evals/reports`. Only the default
-config (`hybrid+rerank+graph`) is gated in CI; the other rows are comparison
+config (`hybrid+rerank+graph`) is gated (faithfulness ≥ 0.90, context precision
+≥ 0.80, citation correctness == 1.0); the other rows are comparison
 configs that are intentionally worse by design (see `scripts/run_matrix.py`).

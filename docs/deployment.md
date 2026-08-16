@@ -40,17 +40,21 @@ All 5 services (api/worker/db/cache/graph) can also run fully containerized:
 - Documents that stay empty get `extraction_status=empty` + a UI badge + an
   ingest log warning — never silent.
 
-## CI (GitHub Actions)
+## CI (GitHub Actions — removed)
 
-`.github/workflows/ci.yml` runs on push/PR: `uv sync --frozen` → `ruff check`
-(baseline 283) → `ruff format --check` (drift ≤ 54) → `pytest` →
-`run_matrix tech` (thresholds: faithfulness ≥ 0.90, context_precision ≥ 0.80,
-citation_correctness == 1.0, enforced on the default config only). Postgres/Redis/Neo4j
-start as compose services; the matrix skips cleanly if the DB is unreachable or the
-dataset's corpus isn't ingested yet. Free-tier quota warnings:
-judge/extraction calls count against the Gemini daily quota — if CI keeps
-failing on "judge unavailable", set `METIS_JUDGE_PROVIDER` / `METIS_EXTRACTION_PROVIDER`
-secrets to `groq` (or an ollama service) in the workflow env.
+`.github/workflows/ci.yml` was removed (`074ba77`): the corpus-dependent
+`run_matrix` gate kept failing on fresh CI databases (no chunks seeded → the
+matrix skipped, so the gate never ran). The checks it ran are now **local gates,
+run deliberately before pushing**:
+
+- `uv sync --frozen` → `ruff check` (violation count ≤ 283) → `ruff format --check` (drift ≤ 54)
+- `uv run pytest`
+- `uv run python -m scripts.run_matrix tech` — thresholds: faithfulness ≥ 0.90,
+  context_precision ≥ 0.80, citation_correctness == 1.0, enforced on the default
+  config only. Needs Postgres reachable **and** the dataset's corpus ingested;
+  it skips cleanly otherwise. If the free-tier quota is exhausted (judge/extraction
+  calls count against the Gemini daily quota), set `METIS_JUDGE_PROVIDER` /
+  `METIS_EXTRACTION_PROVIDER` to `groq` (or an ollama service) and re-run.
 
 ## Cloud: Render (free tier) + Neo4j AuraDB Free
 

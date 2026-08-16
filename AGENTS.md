@@ -14,14 +14,18 @@ uv run arq app.workers.settings.WorkerSettings   # ingest worker — required or
 uv run pytest
 uv run ruff check . && uv run ruff format --check .
 uv run python scripts/frontend_qa.py   # Playwright UI check; expects server on :8011 (default) — start `uv run uvicorn app.main:app --port 8011` or pass a URL; needs `uv run playwright install chromium` once
-uv run python -m scripts.run_matrix tech   # (or "Philosophy") config-matrix eval with thresholds (see CI)
+uv run python -m scripts.run_matrix tech   # (or "Philosophy") config-matrix eval with thresholds (see Local gates)
 ```
 
 Until a DB is up, pytest auto-skips Postgres/Redis/Neo4j tests (`require_db`/`require_redis`/`require_graph` fixtures). There is no typecheck step — `ruff check` is the only lint gate.
 
-## CI (.github/workflows/ci.yml)
+## Local gates (CI workflow was removed — `074ba77`)
 
-`uv sync --frozen` → `ruff check` (violation count must stay ≤ 283) → `ruff format --check` (drift ≤ 54) → `pytest` → `run_matrix tech`. The workflow starts Postgres/Redis/Neo4j as compose services. `run_matrix` enforces thresholds only when Postgres is reachable AND the dataset's corpus is ingested (skip-if-down/empty — a fresh CI DB has no chunks, so seed the corpus there before relying on the gate): faithfulness ≥ 0.90, context_precision ≥ 0.80, citation_correctness == 1.0; exits 1 on any breach or when a judge score is unavailable. Only the default config (`hybrid+rerank+graph`) is gated; the other matrix rows are comparison configs that are intentionally worse by design. Keep the ruff/format baselines in the workflow in sync with reality — bump them deliberately, not to mask regressions.
+The GitHub Actions workflow is gone (the corpus-dependent `run_matrix` gate kept failing on fresh CI DBs). Run these deliberately before pushing:
+
+- `uv sync --frozen` → `ruff check` (violation count must stay ≤ 283) → `ruff format --check` (drift ≤ 54) → `pytest` → `run_matrix tech`.
+- `run_matrix` enforces thresholds only when Postgres is reachable AND the dataset's corpus is ingested (skip-if-down/empty — a fresh DB has no chunks, so seed the corpus before relying on the gate): faithfulness ≥ 0.90, context_precision ≥ 0.80, citation_correctness == 1.0; exits 1 on any breach or when a judge score is unavailable. Only the default config (`hybrid+rerank+graph`) is gated; the other matrix rows are comparison configs that are intentionally worse by design.
+- Keep the ruff/format baselines in sync with reality — bump them deliberately, not to mask regressions.
 
 ## Architecture
 
