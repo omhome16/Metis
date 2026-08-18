@@ -29,9 +29,10 @@ The GitHub Actions workflow is gone (the corpus-dependent `run_matrix` gate kept
 
 ## Architecture
 
-- `app/api/routes/` — one router file per endpoint group; wired in `app/main.py` under `/api/v1`. Includes `POST /ask/{message_id}/feedback` (negative feedback evicts matching semantic-cache entries) and `GET /evals/feedback`.
+- `app/api/routes/` — one router file per endpoint group; wired in `app/main.py` under `/api/v1`. Includes `POST /ask/{message_id}/feedback` (negative feedback evicts matching semantic-cache entries), `GET /evals/feedback`, `GET/PUT /settings` (runtime settings, see Env gotchas) and `GET /library/reorganizations` (reorg audit log).
 - `app/gateway/` — LLM provider abstraction (Groq, Gemini, ollama, mock). No API keys → MockProvider fallback; most tests run entirely on the mock. Task routing is per-task (`generation→groq`, `extraction/judge→gemini`) with per-task overrides `METIS_JUDGE_PROVIDER` / `METIS_EXTRACTION_PROVIDER`.
-- `app/rag/` — chunking (parent-child: parents ~2k chars, children cut from parents) → embeddings → hybrid retrieval → rerank → context → `agent.py` (ReAct loop). `app/graph/` is the Neo4j store/extraction + community detection (`communities.py`); `app/evals/` has golden datasets + metrics; `app/workers/ingest.py` is the arq job.
+- `app/rag/` — chunking (parent-child: parents ~2k chars, children cut from parents) → embeddings → hybrid retrieval → rerank → context → `agent.py` (ReAct loop). `app/graph/` is the Neo4j store/extraction + community detection (`communities.py`); `app/evals/` has golden datasets + metrics; `app/workers/` has the arq jobs — `ingest.py` (document pipeline) and `reorg.py` (auto-reorg: community detection + delta-only summary refresh, debounced per runtime policy; `should_run` accepts a `now` kwarg for tests).
+- Extraction is tiered (`app/graph/extraction.py`): `t1` local regex (default), `t2` t1 + LLM on sampled 8000-char windows, `t3` LLM per parent (60 max) — all fall back to t1 without API keys; mode + window count are runtime settings. Cache lookups (`app/cache.py`) take a `question=` kwarg — the near-duplicate guard (token Jaccard ≥ `cache_min_jaccard`, length ratio ≤ `cache_max_len_ratio`, capitalized-token agreement) runs only when it's provided.
 - Migrations: alembic (async, `alembic/env.py` reads `settings.db_url`). Add a numbered migration for any schema change; models register via `import app.db.models` in env.py.
 
 ## Env gotchas
@@ -43,6 +44,7 @@ The GitHub Actions workflow is gone (the corpus-dependent `run_matrix` gate kept
 - The frontend QA script runs against the server on `:8011` by default (not :8000).
 - Groq/Gemini free tiers exhaust fast (Groq ~100k tokens/day, Gemini flash ~20 req/day): when rate-limited, route `judge`/`extraction` to another provider via `METIS_JUDGE_PROVIDER`/`METIS_EXTRACTION_PROVIDER` (e.g. `groq` or a local `ollama` model). `OllamaProvider.structured` works only if the prompt mentions "json" — it injects a hint when absent; don't remove that.
 - OCR (`METIS_OCR_ENGINE=pytesseract`) needs the **tesseract binary** on PATH (`apt-get install tesseract-ocr` / tesseract-ocr.win64), not just the Python wheel.
+- Runtime settings (`app/core/runtime_settings.py`) live in the `app_settings` table with env defaults in `app/core/config.py` (`METIS_GRAPH_EXTRACTION_MODE`, `METIS_GRAPH_EXTRACT_WINDOWS`, `METIS_GRAPH_REORG_AUTO`, `METIS_GRAPH_REORG_POLICY`, `METIS_GRAPH_REORG_MIN_DOCS`, `METIS_CACHE_MIN_JACCARD`, `METIS_CACHE_MAX_LEN_RATIO`); `GET/PUT /api/v1/settings` merges overrides over defaults and validates values (mode ∈ t1/t2/t3, policy ∈ batch/debounced/nightly). DB reads never raise — a missing table or unreachable Postgres silently returns defaults.
 
 ## Testing
 

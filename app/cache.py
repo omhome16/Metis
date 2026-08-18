@@ -5,10 +5,17 @@ a HALFVEC column behind an HNSW index. Lookup is ONE SQL query — nearest
 neighbor by cosine distance, gated by corpus + TTL + corpus_version — instead of
 the Redis scan-and-compare path (Redis is queue-only since P2).
 
+P8 near-duplicate guard: cosine alone lets entity-swapped questions hit
+("Do Hobbes and Locke agree…" vs "Do Hobbes and Rousseau agree…" are near-
+identical in embedding space). A hit must also share ≥ `cache_min_jaccard` of
+tokens and match entity-like (capitalized) tokens; loose paraphrases miss the
+cache by design — a documented tradeoff.
+
 Cache must never break ask: every public function swallows errors and returns a
 miss. Hits replay the exact SSE contract with `cached: true`.
 """
 
+import re
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, update
@@ -23,6 +30,8 @@ from app.db.versions import get_corpus_version
 logger = get_logger(__name__)
 
 _MISS_KEY = "misses"
+_TOKEN_RE = re.compile(r"[a-z0-9']+")
+_CAP_RE = re.compile(r"\b[A-Z][a-z]+\b")
 
 
 def _now() -> datetime:
@@ -63,11 +72,14 @@ async def cache_lookup(
     query_embedding: list[float],
     corpus: str | None = None,
     current_version: int | None = None,
+    question: str | None = None,
 ) -> dict | None:
     """Nearest cache entry within similarity threshold, version + TTL matched.
 
     Single query: `ORDER BY question_embedding <=> :q LIMIT 1`. Returns None on
-    any failure — ask must never break because of the cache.
+    any failure — ask must never break because of the cache. When `question` is
+    given, the P8 near-duplicate guard additionally requires token overlap +
+    entity-token agreement with the stored question.
     """
     if not query_embedding:
         return None
@@ -88,6 +100,9 @@ async def cache_lookup(
         if _cosine(row.question_embedding, query_embedding) < settings.cache_similarity_threshold:
             await _bump(session, _MISS_KEY)
             return None
+        if question and _query_too_different(row.question, question):
+            await _bump(session, _MISS_KEY)
+            return None
         await session.execute(
             update(CacheEntry)
             .where(CacheEntry.id == row.id)
@@ -98,6 +113,30 @@ async def cache_lookup(
     except Exception as exc:  # noqa: BLE001
         logger.warning("cache lookup failed: %s", exc)
         return None
+
+
+def _query_too_different(stored: str, question: str) -> bool:
+    """P8 near-duplicate guard — False means "safe to serve the cached answer".
+
+    Three cheap checks, no LLM: token Jaccard (loose paraphrases miss), length
+    ratio, and capitalized-token agreement (catches single-entity swaps like
+    "Hobbes and Locke" vs "Hobbes and Rousseau", which are near-identical in
+    embedding space). Questions without capitalized tokens skip the entity check.
+    """
+    a, b = _TOKEN_RE.findall((stored or "").lower()), _TOKEN_RE.findall((question or "").lower())
+    if not a or not b:
+        return True
+    union = set(a) | set(b)
+    jaccard = len(set(a) & set(b)) / len(union)
+    if jaccard < settings.cache_min_jaccard:
+        return True
+    ratio = max(len(a), len(b)) / max(min(len(a), len(b)), 1)
+    if ratio > settings.cache_max_len_ratio:
+        return True
+    caps_a, caps_b = set(_CAP_RE.findall(stored or "")), set(_CAP_RE.findall(question or ""))
+    if caps_a and caps_b and caps_a != caps_b:
+        return True
+    return False
 
 
 async def cache_store(

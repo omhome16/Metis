@@ -11,6 +11,7 @@ const SWATCHES = ["#2E6B4E", "#B0613A", "#3B5A79", "#7A5C8C", "#96691F", "#5E6B4
 const LIBRARY_ITEMS = [
   { id: "graph", label: "Library graph", icon: "network" },
   { id: "surprises", label: "Surprises", icon: "sparkle" },
+  { id: "settings", label: "Settings", icon: "gear" },
 ];
 
 export function renderSidebar() {
@@ -42,7 +43,7 @@ function renderLibraryNav() {
   if (!list) return;
   clear(list);
   const route = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
-  const activeTab = route[0] === "library" ? route[1] : null;
+  const activeTab = route[0] === "library" ? route[1] : route[0] === "settings" ? "settings" : null;
   for (const item of LIBRARY_ITEMS) {
     const btn = el("button", {
       class: `vault-item library-item${activeTab === item.id ? " active" : ""}`,
@@ -52,7 +53,9 @@ function renderLibraryNav() {
       el("span", { class: "vault-swatch lib", html: icon(item.icon, 12) }),
       el("span", { class: "vault-name", text: item.label })
     );
-    btn.addEventListener("click", () => { location.hash = libraryPath(item.id); });
+    btn.addEventListener("click", () => {
+      location.hash = item.id === "settings" ? "#/settings" : libraryPath(item.id);
+    });
     list.append(btn);
   }
 }

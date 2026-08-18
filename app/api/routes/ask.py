@@ -35,7 +35,9 @@ router = APIRouter(tags=["ask"])
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=500)
     corpus: str | None = Field(None, max_length=128)
-    image: str | None = Field(None, max_length=15_000_000)  # ~11MB base64 data URL — multimodal (M4)
+    image: str | None = Field(
+        None, max_length=15_000_000
+    )  # ~11MB base64 data URL — multimodal (M4)
     conversation_id: str | None = Field(None, max_length=64)
     stream: bool = True
     options: dict = Field(default_factory=dict)
@@ -47,7 +49,9 @@ async def _cached_events(entry: dict) -> AsyncIterator[ServerSentEvent]:
     answer = entry.get("answer", "")
     for token in answer.split(" "):
         yield ServerSentEvent(event="tokens", data=json.dumps({"text": token + " "}))
-    yield ServerSentEvent(event="citations", data=json.dumps(entry.get("citations") or {"citations": []}))
+    yield ServerSentEvent(
+        event="citations", data=json.dumps(entry.get("citations") or {"citations": []})
+    )
     done = dict(entry.get("done") or {})
     done["cached"] = True
     yield ServerSentEvent(event="done", data=json.dumps(done))
@@ -102,11 +106,23 @@ async def ask(request: AskRequest, session: AsyncSession = Depends(get_session))
     async def event_stream():
         cached_flag = False
         cached: dict | None = None
-        collected: dict = {"sources": None, "citations": None, "done": None, "answer_parts": [], "error": None}
+        collected: dict = {
+            "sources": None,
+            "citations": None,
+            "done": None,
+            "answer_parts": [],
+            "error": None,
+        }
         if not request.image:
             try:
                 query_vec = await get_embedder().embed_query(request.question)
-                cached = await cache_lookup(session, query_vec, request.corpus, current_version=corpus_version)
+                cached = await cache_lookup(
+                    session,
+                    query_vec,
+                    request.corpus,
+                    current_version=corpus_version,
+                    question=request.question,
+                )
                 if cached:
                     logger.info("cache HIT for corpus=%s", request.corpus)
                     cached_flag = True
@@ -137,7 +153,9 @@ async def ask(request: AskRequest, session: AsyncSession = Depends(get_session))
                     elif event == "done":
                         collected["done"] = data
                     elif event == "tokens":
-                        if data["text"].startswith("[generation failed") or data["text"].startswith("[agent error"):
+                        if data["text"].startswith("[generation failed") or data["text"].startswith(
+                            "[agent error"
+                        ):
                             collected["error"] = data["text"]
                         collected["answer_parts"].append(data["text"])
                     yield ServerSentEvent(event=event, data=json.dumps(data))
@@ -166,17 +184,35 @@ async def ask(request: AskRequest, session: AsyncSession = Depends(get_session))
 
         # Persist the exchange (and auto-create a conversation on first message).
         try:
-            conv_id = (request.conversation_id or conversation.id) if (request.conversation_id or conversation) else None
+            conv_id = (
+                (request.conversation_id or conversation.id)
+                if (request.conversation_id or conversation)
+                else None
+            )
             if not conv_id and request.corpus:
-                conv = Conversation(vault_name=request.corpus, title=request.question[:80] or "New conversation")
+                conv = Conversation(
+                    vault_name=request.corpus, title=request.question[:80] or "New conversation"
+                )
                 session.add(conv)
                 await session.commit()
                 conv_id = conv.id
             if conv_id:
-                answer = "".join(collected.get("answer_parts", [])) if not cached_flag else (cached or {}).get("answer", "")
+                answer = (
+                    "".join(collected.get("answer_parts", []))
+                    if not cached_flag
+                    else (cached or {}).get("answer", "")
+                )
                 done = collected.get("done") if not cached_flag else (cached or {}).get("done", {})
-                sources = collected.get("sources") if not cached_flag else (cached or {}).get("sources", {"chunks": []})
-                citations = collected.get("citations") if not cached_flag else (cached or {}).get("citations", {})
+                sources = (
+                    collected.get("sources")
+                    if not cached_flag
+                    else (cached or {}).get("sources", {"chunks": []})
+                )
+                citations = (
+                    collected.get("citations")
+                    if not cached_flag
+                    else (cached or {}).get("citations", {})
+                )
                 await append_message(session, conv_id, "user", request.question)
                 assistant_msg = await append_message(
                     session,

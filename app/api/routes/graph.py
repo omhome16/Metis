@@ -3,8 +3,13 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from app.gateway.gateway import get_gateway
-from app.graph.communities import detect_communities, summarize_communities
+from app.graph.communities import (
+    detect_communities,
+    invalidate_stale_summaries,
+    summarize_communities,
+)
 from app.graph.store import get_graph_store
+from app.workers.reorg import record_reorg_run
 
 router = APIRouter(prefix="/graph", tags=["graph"])
 
@@ -45,10 +50,25 @@ async def stats() -> dict:
 
 @router.post("/communities")
 async def communities() -> dict:
-    """On-demand P5 job: community detection (GDS or LPA fallback) + LLM summaries."""
+    """On-demand P5 job: community detection (GDS or LPA fallback) + LLM summaries.
+
+    P8: also invalidates summaries of changed communities, and records the run
+    in `reorg_runs` (the same log auto-reorgs write) so the Library UI shows it.
+    """
     store = await _store()
     detected = await detect_communities(store)
     summarized = {"summaries": 0, "skipped": 0, "total": 0}
+    invalidated = 0
     if detected.get("communities", 0) > 0:
+        invalidated = await invalidate_stale_summaries(store)
         summarized = await summarize_communities(get_gateway(), store)
+        summarized["invalidated"] = invalidated
+    await record_reorg_run(
+        "manual",
+        docs_since_last=0,
+        communities_before=0,
+        communities_after=detected.get("communities", 0),
+        summaries_made=summarized.get("summaries", 0),
+        detail={"detected": detected, "invalidated_summaries": invalidated},
+    )
     return {**detected, **summarized, "degraded": detected.get("engine") != "gds"}

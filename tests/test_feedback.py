@@ -55,7 +55,7 @@ async def test_feedback_upsert_and_validation(client, message_pair):
     )
 
 
-async def test_feedback_unknown_message_404(client):
+async def test_feedback_unknown_message_404(require_db):
     resp = await client.post(f"/api/v1/ask/{uuid.uuid4()}/feedback", json={"rating": 1})
     assert resp.status_code == 404
 

@@ -6,8 +6,14 @@ Community Edition (and in tests). Assignments are stored on Entity nodes as
 `community_id` / `community_rank` (rank = degree order within the community);
 per-community LLM summaries live on `:Community {id, summary, entity_count}`
 nodes and are generated idempotently (existing summaries are kept).
+
+P8: `invalidate_stale_summaries` clears summaries of communities whose member
+set changed since the last detection (membership hash), so auto-reorgs refresh
+only what moved — LLM spend stays bounded to deltas.
 """
 
+import hashlib
+import json
 from collections import defaultdict
 from typing import Any
 
@@ -193,6 +199,49 @@ async def _community_has_summary(store: GraphStore, community_id: str) -> bool:
         )
         record = await result.single()
         return bool(record and record["n"] > 0)
+
+
+async def invalidate_stale_summaries(store: GraphStore) -> int:
+    """Clear summaries of communities whose membership changed since last detection.
+
+    Run after `detect_communities`: communities whose member set differs from the
+    stored `members_hash` lose their cached summary, so the next
+    `summarize_communities` pass regenerates it. Returns the number invalidated;
+    never raises (a reorg must survive a bad query).
+    """
+    try:
+        async with store._driver.session() as session:
+            result = await session.run(
+                "MATCH (e:Entity) WHERE e.community_id IS NOT NULL "
+                "WITH e.community_id AS cid, collect(e.canonical) AS members "
+                "RETURN cid, members"
+            )
+            rows = [(rec["cid"], sorted(rec["members"])) async for rec in result]
+        invalidated = 0
+        async with store._driver.session() as session:
+            for cid, members in rows:
+                digest = hashlib.sha256(
+                    json.dumps(members, ensure_ascii=False).encode()
+                ).hexdigest()
+                result = await session.run(
+                    "MERGE (c:Community {id: $id}) "
+                    "SET c.members = $members, c.entity_count = size($members) "
+                    "WITH c WHERE coalesce(c.members_hash, '') <> $hash "
+                    "REMOVE c.summary "
+                    "SET c.members_hash = $hash "
+                    "RETURN count(c) AS n",
+                    id=cid,
+                    members=members[:_SUMMARY_MAX_MEMBERS],
+                    hash=digest,
+                )
+                record = await result.single()
+                invalidated += int(record["n"]) if record else 0
+        if invalidated:
+            logger.info("invalidated %d stale community summaries", invalidated)
+        return invalidated
+    except Exception as exc:  # noqa: BLE001 — must never break a reorg
+        logger.warning("summary invalidation failed: %s", exc)
+        return 0
 
 
 async def _evidence_snippets(store: GraphStore, members: list[str]) -> list[str]:

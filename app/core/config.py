@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     top_k_rerank: int = 5
     cache_similarity_threshold: float = 0.92
     cache_ttl_days: int = 7
+    # Near-duplicate guard on cache hits (P8): a hit must also share ≥ min_jaccard
+    # of tokens and match entity-like (capitalized) tokens — cosine alone lets
+    # entity-swapped questions ("Hobbes and Locke" vs "Hobbes and Rousseau") hit.
+    cache_min_jaccard: float = 0.8
+    cache_max_len_ratio: float = 1.5
     query_rewrite: bool = True
     rerank_enabled: bool = True
 
@@ -107,6 +112,18 @@ class Settings(BaseSettings):
     # ── Graph extraction (P2 lazy move) ────────────────────────────────────
     # true: LLM typed-relations at ingest; false: regex fallback only (offline build).
     graph_llm_extract: bool = True
+
+    # ── Graph self-organization (runtime-settable via /api/v1/settings) ────
+    # Extraction tiers: t1 = local regex over every parent chunk (full coverage,
+    # zero LLM cost, co-occurrence edges); t2 = t1 + LLM typed relations on
+    # sampled windows; t3 = LLM per parent chunk (needs an API key — falls back
+    # to t1 without one). Auto-reorg runs community detection + summary refresh
+    # after ingest batches, debounced per policy (batch | debounced | nightly).
+    graph_extraction_mode: str = "t1"
+    graph_extract_windows: int = 3
+    graph_reorg_auto: bool = True
+    graph_reorg_policy: str = "debounced"
+    graph_reorg_min_docs: int = 3
 
     # ── HNSW tuning (pgvector 0.8+; per-connection GUCs) ──────────────────
     hnsw_ef_search: int = 120

@@ -8,11 +8,12 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.runtime_settings import get_setting
 from app.db.models import Document, IngestJob
 from app.db.session import async_session_factory
 from app.db.versions import bump_corpus_version
 from app.gateway.gateway import get_gateway
-from app.graph.extraction import extract_entities
+from app.graph.extraction import extract_document
 from app.graph.store import get_graph_store
 from app.rag.chunking import chunk_into_parents, chunk_text
 from app.rag.embeddings import get_embedder, get_image_embedder
@@ -72,7 +73,9 @@ async def process_ingest_job(ctx: dict, job_id: str) -> None:
         await session.commit()
 
         docs = (
-            (await session.execute(select(Document).where(Document.ingest_job_id == job_id))).scalars().all()
+            (await session.execute(select(Document).where(Document.ingest_job_id == job_id)))
+            .scalars()
+            .all()
         )
         total = max(len(docs), 1)
         for i, doc in enumerate(docs):
@@ -92,6 +95,10 @@ async def process_ingest_job(ctx: dict, job_id: str) -> None:
             await bump_corpus_version(session, job.corpus)
         await session.commit()
         logger.info("job %s finished: %d docs, errors=%s", job_id, len(docs), job.per_file_errors)
+        if docs and not job.per_file_errors and bool(await get_setting("graph.reorg_auto", True)):
+            from app.workers.enqueue import enqueue_reorg_job  # local: breaks an import cycle
+
+            await enqueue_reorg_job()
 
 
 async def _process_text(session, gateway, graph, graph_ok, embedder, doc) -> None:
@@ -126,7 +133,16 @@ async def _process_text(session, gateway, graph, graph_ok, embedder, doc) -> Non
     if not rows:
         return
     if graph_ok:
-        extracted = await extract_entities(gateway, text, use_llm=settings.graph_llm_extract)
+        mode = str(await get_setting("graph.extraction_mode", "t1"))
+        windows = int(await get_setting("graph.extract_windows", 3))
+        extracted = await extract_document(
+            gateway,
+            text,
+            mode=mode,
+            parent_size=settings.parent_size,
+            windows=windows,
+            use_llm=settings.graph_llm_extract,
+        )
         await graph.upsert_document_graph(
             doc_id=doc.id,
             title=doc.title,
@@ -161,9 +177,7 @@ async def _build_chunks(session, embedder, doc, text: str) -> list:
         start_indices.append(sum(len(g) for g in per_parent_children[:-1]))
     parent_rows = await store_parents(session, doc.id, parents, start_indices=start_indices)
     child_texts = [c for group in per_parent_children for c in group]
-    parent_ids = [
-        parent_rows[i].id for i, group in enumerate(per_parent_children) for _ in group
-    ]
+    parent_ids = [parent_rows[i].id for i, group in enumerate(per_parent_children) for _ in group]
     embeddings = await embedder.embed_texts(child_texts)
     return await store_chunks(session, doc.id, child_texts, embeddings, parent_ids=parent_ids)
 

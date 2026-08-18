@@ -43,6 +43,11 @@ export const api = {
   libraryEntities: (q, limit = 12) => request("GET", `/api/v1/library/entities?q=${enc(q)}&limit=${limit}`),
   librarySurprises: () => request("GET", "/api/v1/library/surprises"),
   libraryJourney: (from, to) => request("GET", `/api/v1/library/journey?from=${enc(from)}&to=${enc(to)}`),
+  reorgRuns: (limit = 8) => request("GET", `/api/v1/library/reorganizations?limit=${limit}`),
+
+  settings: () => request("GET", "/api/v1/settings"),
+  saveSettings: (data) => request("PUT", "/api/v1/settings", { json: { settings: data } }),
+  runCommunities: () => request("POST", "/api/v1/graph/communities"),
 
   doc: (id) => request("GET", `/api/v1/documents/${id}`),
   docContent: (id) => request("GET", `/api/v1/documents/${id}/content`),

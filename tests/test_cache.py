@@ -107,6 +107,67 @@ async def test_cache_stale_on_new_ingest(require_db):
         version_after = await get_corpus_version(session, corpus)
         assert version_after > version_before
         assert await cache_lookup(session, _vec(), corpus, current_version=version_after) is None
+
+
+# ── P8 near-duplicate guard ──────────────────────────────────────────────────
+
+
+def test_query_too_different_guard():
+    from app.cache import _query_too_different
+
+    q1 = "Do Hobbes and Locke agree on the state of nature?"
+    q2 = "Do Hobbes and Rousseau agree on the state of nature?"
+    assert _query_too_different(q1, q2) is True  # entity swap → block
+    assert _query_too_different(q1, q1) is False  # identical → serve
+    assert _query_too_different(q1, "Completely unrelated question about pasta?") is True
+    assert (
+        _query_too_different("what is the state of nature", "what is the state of nature?") is False
+    )
+    assert (
+        _query_too_different("what is the state of nature", "what is the meaning of life") is True
+    )
+
+
+async def test_cache_guard_blocks_entity_swapped_question(require_db):
+    """P8: embedding-identical but entity-different questions must NOT share a hit."""
+    from datetime import datetime, timedelta
+
+    corpus = f"cache-swap-{uuid.uuid4().hex[:8]}"
+    q1 = "Do Hobbes and Locke agree on the state of nature?"
+    q2 = "Do Hobbes and Rousseau agree on the state of nature?"
+    async with async_session_factory() as session:
+        session.add(
+            CacheEntry(
+                corpus=corpus,
+                question=q1,
+                question_embedding=_vec(),
+                answer="cached answer about Hobbes and Locke",
+                sources={},
+                citations={},
+                done={},
+                corpus_version=1,
+                expires_at=datetime.now(UTC) + timedelta(days=7),
+            )
+        )
+        await session.commit()
+    async with async_session_factory() as session:
+        assert (
+            await cache_lookup(session, _vec(), corpus, current_version=1, question=q1) is not None
+        )
+        assert await cache_lookup(session, _vec(), corpus, current_version=1, question=q2) is None
+        assert (
+            await cache_lookup(
+                session,
+                _vec(),
+                corpus,
+                current_version=1,
+                question="Could you explain what Hobbes thinks about the state of nature?",
+            )
+            is None
+        )
+        assert await cache_lookup(session, _vec(), corpus, current_version=1) is not None
+        await session.execute(delete(CacheEntry).where(CacheEntry.corpus == corpus))
+        await session.commit()
         await session.execute(delete(CacheEntry).where(CacheEntry.corpus == corpus))
         await session.commit()
 

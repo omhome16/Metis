@@ -36,7 +36,9 @@ class Document(Base):
     source_url: Mapped[str | None] = mapped_column(String(1024))
     format: Mapped[str] = mapped_column(String(16))  # pdf | md | txt | image
     extraction_status: Mapped[str] = mapped_column(String(16), default="ok")  # ok | ocr | empty
-    content_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # sha256 → idempotent ingest
+    content_hash: Mapped[str] = mapped_column(
+        String(64), unique=True, index=True
+    )  # sha256 → idempotent ingest
     ingest_job_id: Mapped[str | None] = mapped_column(String(36), index=True)
     raw_text: Mapped[str | None] = mapped_column(Text)
     file_path: Mapped[str | None] = mapped_column(String(1024))
@@ -45,7 +47,9 @@ class Document(Base):
     author: Mapped[str | None] = mapped_column(String(256))
     ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
-    chunks: Mapped[list["Chunk"]] = relationship(back_populates="document", cascade="all, delete-orphan")
+    chunks: Mapped[list["Chunk"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan"
+    )
 
 
 class Chunk(Base):
@@ -131,7 +135,9 @@ class IngestJob(Base):
     progress: Mapped[float] = mapped_column(Float, default=0.0)
     per_file_errors: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
 
 
 class CorpusVersion(Base):
@@ -141,7 +147,9 @@ class CorpusVersion(Base):
 
     corpus: Mapped[str] = mapped_column(String(128), primary_key=True)
     version: Mapped[int] = mapped_column(Integer, default=0)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
 
 
 class CacheEntry(Base):
@@ -187,9 +195,13 @@ class Conversation(Base):
     vault_name: Mapped[str] = mapped_column(String(128), index=True)
     title: Mapped[str] = mapped_column(String(512), default="New conversation")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
 
-    messages: Mapped[list["Message"]] = relationship(back_populates="conversation", cascade="all, delete-orphan")
+    messages: Mapped[list["Message"]] = relationship(
+        back_populates="conversation", cascade="all, delete-orphan"
+    )
 
 
 class Message(Base):
@@ -227,3 +239,23 @@ class Feedback(Base):
     rating: Mapped[int] = mapped_column(Integer)  # 1 = thumbs up, -1 = thumbs down
     note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ReorgRun(Base):
+    """One automatic (or manual) library reorganization (P8).
+
+    Community detection + summary refresh after ingest batches; the row is both
+    the debounce state (`run_at` / `docs_since_last`) and the audit log surfaced
+    at `GET /api/v1/library/reorganizations`.
+    """
+
+    __tablename__ = "reorg_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    triggered_by: Mapped[str] = mapped_column(String(32), default="auto")  # auto | manual
+    docs_since_last: Mapped[int] = mapped_column(Integer, default=0)
+    communities_before: Mapped[int] = mapped_column(Integer, default=0)
+    communities_after: Mapped[int] = mapped_column(Integer, default=0)
+    summaries_made: Mapped[int] = mapped_column(Integer, default=0)
+    detail: Mapped[dict | None] = mapped_column(JSON)

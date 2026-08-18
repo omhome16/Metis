@@ -17,6 +17,7 @@ export function parseHash() {
       tab: ["graph", "surprises"].includes(parts[1]) ? parts[1] : "graph",
     };
   }
+  if (parts[0] === "settings") return { name: "settings" };
   return { name: "home" };
 }
 

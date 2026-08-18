@@ -17,11 +17,13 @@ import re
 import uuid
 from collections.abc import AsyncIterator
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.models import Chunk
+from app.db.session import async_session_factory
 from app.gateway.gateway import LLMGateway, estimate_cost_usd
 from app.graph.extraction import extract_entities
 from app.graph.store import get_graph_store
@@ -149,40 +151,107 @@ async def _corpus_has_tags(session, corpus: str | None, tags: list[str]) -> bool
     """True if any doc in `corpus` carries at least one of `tags` (array overlap)."""
     from sqlalchemy import text
 
-    row = (await session.execute(
-        text("SELECT 1 FROM documents WHERE corpus = :c AND tags && :tags LIMIT 1"),
-        {"c": corpus or "default", "tags": tags},
-    )).first()
+    row = (
+        await session.execute(
+            text("SELECT 1 FROM documents WHERE corpus = :c AND tags && :tags LIMIT 1"),
+            {"c": corpus or "default", "tags": tags},
+        )
+    ).first()
     return row is not None
+
+
+# P8 contradiction widening: local embedding pre-filter over all top-k pairs;
+# only pairs in the "suspicious band" (same subject, not near-identical) reach
+# the LLM judge, capped so the judge quota stays bounded.
+_CONTRADICTION_BAND = (0.70, 0.95)
+_CONTRADICTION_MAX_PAIRS = 4
 
 
 async def contradiction_scan(
     gateway: LLMGateway,
     hits: list[ChunkHit],
 ) -> dict | None:
-    """Compare the two top chunks; surface a 'sources disagree' alert if they conflict."""
+    """Compare candidate source pairs; surface a 'sources disagree' alert on conflict.
+
+    P8: instead of judging only the top-2 chunks (a conflict between source #1
+    and source #4 was invisible), all pairs among the top-k hits are pre-filtered
+    locally by embedding cosine — only same-subject pairs cost an LLM call.
+    """
     if len(hits) < 2:
         return None
-    a, b = hits[0].chunk, hits[1].chunk
+    store = get_graph_store()
+    if not await store.ping():
+        return None
     try:
-        store = get_graph_store()
-        if not await store.ping():
-            return None
-        if await store.has_contradiction(a.id, b.id):
-            return {"alert": "sources disagree", "chunks": [a.id, b.id], "reason": "previously detected"}
-        verdict = await check_contradiction(gateway, a.text, b.text)
-        if verdict["contradicts"]:
-            await store.add_contradiction(a.id, b.id)
-            return {"alert": "sources disagree", "chunks": [a.id, b.id], "reason": verdict["reason"]}
+        pairs = await _candidate_pairs(hits)
+        for a_chunk, b_chunk in pairs:
+            if await store.has_contradiction(a_chunk.id, b_chunk.id):
+                return {
+                    "alert": "sources disagree",
+                    "chunks": [a_chunk.id, b_chunk.id],
+                    "reason": "previously detected",
+                }
+            verdict = await check_contradiction(gateway, a_chunk.text, b_chunk.text)
+            if verdict["contradicts"]:
+                await store.add_contradiction(a_chunk.id, b_chunk.id)
+                return {
+                    "alert": "sources disagree",
+                    "chunks": [a_chunk.id, b_chunk.id],
+                    "reason": verdict["reason"],
+                }
     except Exception as exc:  # noqa: BLE001
         logger.warning("contradiction scan skipped: %s", exc)
     return None
 
 
+async def _candidate_pairs(hits: list[ChunkHit]) -> list[tuple[Chunk, Chunk]]:
+    """Embedding pre-filter: pairs in the suspicious similarity band, most-alike first.
+
+    Falls back to the top-2 pair when embeddings are unavailable (e.g. agent
+    sources reconstructed without vectors) so the old behavior never regresses.
+    """
+    ids = [h.chunk.id for h in hits if h.chunk.id]
+    if not ids:
+        return [(hits[0].chunk, hits[1].chunk)]
+    try:
+        async with async_session_factory() as session:
+            rows = (
+                await session.execute(select(Chunk.id, Chunk.embedding).where(Chunk.id.in_(ids)))
+            ).all()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("contradiction embedding fetch failed: %s", exc)
+        return [(hits[0].chunk, hits[1].chunk)]
+    embeddings = {row.id: row.embedding for row in rows}
+    pairs: list[tuple[float, Chunk, Chunk]] = []
+    for i in range(len(hits)):
+        for j in range(i + 1, len(hits)):
+            a, b = hits[i].chunk, hits[j].chunk
+            va, vb = embeddings.get(a.id), embeddings.get(b.id)
+            if va is None or vb is None:
+                continue
+            sim = _cosine_sim(va, vb)
+            if _CONTRADICTION_BAND[0] <= sim <= _CONTRADICTION_BAND[1]:
+                pairs.append((sim, a, b))
+    if not pairs:
+        return [(hits[0].chunk, hits[1].chunk)]
+    pairs.sort(key=lambda p: -p[0])
+    return [(a, b) for _, a, b in pairs[:_CONTRADICTION_MAX_PAIRS]]
+
+
+def _cosine_sim(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    na = sum(x * x for x in a) ** 0.5 or 1.0
+    nb = sum(y * y for y in b) ** 0.5 or 1.0
+    return dot / (na * nb)
+
+
 def _sources_payload(chunks: list[ChunkHit]) -> dict:
     return {
         "chunks": [
-            {"id": h.chunk.id, "doc": h.doc_title, "text": h.chunk.text[:400], "score": h.score} for h in chunks
+            {"id": h.chunk.id, "doc": h.doc_title, "text": h.chunk.text[:400], "score": h.score}
+            for h in chunks
         ]
     }
 
@@ -234,7 +303,12 @@ async def ask_events(
             {
                 "answer_id": answer_id,
                 "usage": {"in": prompt_tokens, "out": out_tokens, "lane": lane},
-                "cost_usd": round(estimate_cost_usd(settings.fast_model, {"in": prompt_tokens, "out": out_tokens}), 6),
+                "cost_usd": round(
+                    estimate_cost_usd(
+                        settings.fast_model, {"in": prompt_tokens, "out": out_tokens}
+                    ),
+                    6,
+                ),
             },
         )
         return
@@ -327,7 +401,9 @@ async def ask_events(
     if use_agent:
         usage_est: dict = {"in": 0}
         try:
-            async for event, data in agent_events(session, gateway, question, corpus, history, usage=usage_est):
+            async for event, data in agent_events(
+                session, gateway, question, corpus, history, usage=usage_est
+            ):
                 if event == "thinking":
                     yield ("thinking", data)
                 elif event == "tokens":
@@ -343,17 +419,38 @@ async def ask_events(
         if agent_sources is not None:
             hits = [
                 ChunkHit(
-                    chunk=Chunk(id=s["chunk_id"], doc_id="", text=s["text"], chunk_index=0, tokens=0, embedding=None),
+                    chunk=Chunk(
+                        id=s["chunk_id"],
+                        doc_id="",
+                        text=s["text"],
+                        chunk_index=0,
+                        tokens=0,
+                        embedding=None,
+                    ),
                     score=float(s.get("score") or 0.0),
                     doc_title=s["doc"],
                 )
                 for s in agent_sources
             ]
-            yield ("sources", {"chunks": [{"id": s["chunk_id"], "doc": s["doc"], "text": s["text"][:400], "score": s.get("score")} for s in agent_sources]})
+            yield (
+                "sources",
+                {
+                    "chunks": [
+                        {
+                            "id": s["chunk_id"],
+                            "doc": s["doc"],
+                            "text": s["text"][:400],
+                            "score": s.get("score"),
+                        }
+                        for s in agent_sources
+                    ]
+                },
+            )
         prompt_tokens = usage_est.get("in", 0)
     else:
         image_captions = [
-            {"doc": h.doc_title, "caption": h.image.caption or "", "tags": h.image.tags} for h in image_hits
+            {"doc": h.doc_title, "caption": h.image.caption or "", "tags": h.image.tags}
+            for h in image_hits
         ]
         assembled = assemble_context(question, hits, image_captions=image_captions)
         history_msgs = _history_messages(history)
@@ -378,7 +475,10 @@ async def ask_events(
             {"n": s["n"], "chunk_id": s["chunk_id"], "doc": s["doc"]} for s in agent_sources
         ]
     else:
-        assembled_citations = [{"n": n, "chunk_id": h.chunk.id, "doc": h.doc_title} for n, h in enumerate(hits, start=1)]
+        assembled_citations = [
+            {"n": n, "chunk_id": h.chunk.id, "doc": h.doc_title}
+            for n, h in enumerate(hits, start=1)
+        ]
 
     emitted = parse_citations(answer)
     if emitted:

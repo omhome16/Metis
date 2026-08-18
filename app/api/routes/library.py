@@ -9,8 +9,11 @@ endpoints stay fast and never fail hard.
 import json
 
 from fastapi import APIRouter, HTTPException, Query
+from sqlalchemy import select
 
 from app.core.logging import get_logger
+from app.db.models import ReorgRun
+from app.db.session import async_session_factory
 from app.gateway.gateway import get_gateway
 from app.graph.store import get_graph_store
 
@@ -26,13 +29,17 @@ async def _store():
 
 
 @router.get("/graph")
-async def library_graph(node_limit: int = Query(260, ge=10, le=5000), edge_limit: int = Query(700, ge=10, le=5000)) -> dict:
+async def library_graph(
+    node_limit: int = Query(260, ge=10, le=5000), edge_limit: int = Query(700, ge=10, le=5000)
+) -> dict:
     store = await _store()
     return await store.library_graph(node_limit=node_limit, edge_limit=edge_limit)
 
 
 @router.get("/entities")
-async def search_entities(q: str = Query(..., min_length=1, max_length=120), limit: int = Query(12, ge=1, le=50)) -> dict:
+async def search_entities(
+    q: str = Query(..., min_length=1, max_length=120), limit: int = Query(12, ge=1, le=50)
+) -> dict:
     store = await _store()
     return {"entities": await store.search_entities(q, limit)}
 
@@ -56,13 +63,60 @@ async def journey(
     """Shortest entity-to-entity path across the library, with a narrated story."""
     store = await _store()
     if from_.strip().lower() == to.strip().lower():
-        return {"found": False, "from": from_, "to": to, "nodes": [], "rels": [], "narrative": "Start and destination are the same entity."}
+        return {
+            "found": False,
+            "from": from_,
+            "to": to,
+            "nodes": [],
+            "rels": [],
+            "narrative": "Start and destination are the same entity.",
+        }
     path = await store.journey(from_.strip(), to.strip())
     if path is None:
-        return {"found": False, "from": from_, "to": to, "nodes": [], "rels": [], "narrative": f"No path found between '{from_}' and '{to}' in the current graph."}
+        return {
+            "found": False,
+            "from": from_,
+            "to": to,
+            "nodes": [],
+            "rels": [],
+            "narrative": f"No path found between '{from_}' and '{to}' in the current graph.",
+        }
     path["found"] = True
     path["narrative"] = await _narrate_journey(path)
     return path
+
+
+@router.get("/reorganizations")
+async def reorganizations(limit: int = Query(8, ge=1, le=50)) -> dict:
+    """Audit log of library reorganizations (P8): auto after ingest batches, or manual."""
+    try:
+        async with async_session_factory() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(ReorgRun).order_by(ReorgRun.run_at.desc()).limit(limit)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return {
+            "runs": [
+                {
+                    "run_at": r.run_at.isoformat() if r.run_at else None,
+                    "triggered_by": r.triggered_by,
+                    "docs_since_last": r.docs_since_last,
+                    "communities_before": r.communities_before,
+                    "communities_after": r.communities_after,
+                    "summaries_made": r.summaries_made,
+                    "detail": r.detail,
+                }
+                for r in rows
+            ]
+        }
+    except Exception as exc:  # noqa: BLE001 — the log must never fail the library view
+        logger.warning("reorg log read failed: %s", exc)
+        return {"runs": [], "error": str(exc)}
 
 
 # ── LLM narration (template fallbacks) ───────────────────────────────────────
@@ -80,20 +134,31 @@ async def _narrate_cards(cards: list[dict]) -> list[dict]:
     lines = []
     for i, c in enumerate(cards):
         if c.get("kind") == "shared":
-            lines.append(f"{i + 1}. concept '{c['entity']}' (type {c.get('type', 'Concept')}) appears in vaults {', '.join(c['vaults'])}")
+            lines.append(
+                f"{i + 1}. concept '{c['entity']}' (type {c.get('type', 'Concept')}) appears in vaults {', '.join(c['vaults'])}"
+            )
         else:
-            lines.append(f"{i + 1}. '{c['source']}' (in vault {c.get('vault_a')}) is related to '{c['target']}' (in vault {c.get('vault_b')})")
+            lines.append(
+                f"{i + 1}. '{c['source']}' (in vault {c.get('vault_a')}) is related to '{c['target']}' (in vault {c.get('vault_b')})"
+            )
     prompt = (
         "These are automatically discovered connections between document vaults. "
         "For each, write ONE sentence (max 22 words) that explains why the connection "
         "is interesting or surprising. No numbering, no markdown. "
-        'Return ONLY JSON of the shape {"narrations": ["...", "..."]}, one string per connection:' + "\n\n" + "\n".join(lines)
+        'Return ONLY JSON of the shape {"narrations": ["...", "..."]}, one string per connection:'
+        + "\n\n"
+        + "\n".join(lines)
     )
     try:
         result = await get_gateway().structured(
             "fast",
-            [{"role": "system", "content": "You write short, insightful explanations about connections between ideas."},
-             {"role": "user", "content": prompt}],
+            [
+                {
+                    "role": "system",
+                    "content": "You write short, insightful explanations about connections between ideas.",
+                },
+                {"role": "user", "content": prompt},
+            ],
             {},
         )
         narrations = result.get("narrations") or result.get("insights") or []
@@ -124,14 +189,22 @@ async def _narrate_journey(path: dict) -> str:
     chain = " \u2192 ".join(f"{n} [{r}]" for n, r in zip(names, rels + [""], strict=False))
     prompt = (
         "You are Metis, a librarian AI. The shortest connection between two ideas in a "
-        "knowledge library goes through these entities (and relationship types):" + "\n" + chain +
-        "\nWrite a 2-3 sentence narrative that explains this connection as a surprising or "
+        "knowledge library goes through these entities (and relationship types):"
+        + "\n"
+        + chain
+        + "\nWrite a 2-3 sentence narrative that explains this connection as a surprising or "
         "insightful journey between the ideas. No markdown, no preamble."
     )
     try:
         result = await get_gateway().chat(
-            "fast", [{"role": "system", "content": "You narrate conceptual journeys through a knowledge graph."},
-                     {"role": "user", "content": prompt}],
+            "fast",
+            [
+                {
+                    "role": "system",
+                    "content": "You narrate conceptual journeys through a knowledge graph.",
+                },
+                {"role": "user", "content": prompt},
+            ],
             temperature=0.7,
             max_tokens=220,
         )

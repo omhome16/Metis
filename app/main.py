@@ -13,7 +13,21 @@ from fastapi.staticfiles import StaticFiles
 mimetypes.add_type("font/woff2", ".woff2")
 mimetypes.add_type("font/woff", ".woff")
 
-from app.api.routes import ask, cache, conversations, corpora, documents, evals, graph, health, ingest, library, search, vaults
+from app.api.routes import (
+    ask,
+    cache,
+    conversations,
+    corpora,
+    documents,
+    evals,
+    graph,
+    health,
+    ingest,
+    library,
+    search,
+    settings as settings_routes,
+    vaults,
+)
 from app.core.config import settings
 from app.core.errors import register_exception_handlers
 from app.core.limits import RateLimiter, RateLimitMiddleware
@@ -46,7 +60,9 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 
 # CORS is added last → outermost, so its headers are present even on 429s.
-app.add_middleware(RateLimitMiddleware, limiter=RateLimiter(settings.rate_limit_max, settings.rate_limit_window))
+app.add_middleware(
+    RateLimitMiddleware, limiter=RateLimiter(settings.rate_limit_max, settings.rate_limit_window)
+)
 # allow_credentials is only valid with explicit origins — skip it for the wildcard dev default.
 app.add_middleware(
     CORSMiddleware,
@@ -69,6 +85,7 @@ app.include_router(vaults.router, prefix=settings.api_prefix)
 app.include_router(conversations.router, prefix=settings.api_prefix)
 app.include_router(library.router, prefix=settings.api_prefix)
 app.include_router(documents.router, prefix=settings.api_prefix)
+app.include_router(settings_routes.router, prefix=settings.api_prefix)
 
 # Static frontend (SPA) — API routes above always win; unknown API paths 404.
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

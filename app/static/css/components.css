@@ -1936,3 +1936,21 @@
 @keyframes blink {
   50% { opacity: 0; }
 }
+
+/* -- Settings view (P8) --------------------------------------- */
+.settings-view { max-width: 720px; padding: 28px 24px 60px; }
+.settings-view .page-title { margin: 0 0 4px; font-size: 22px; letter-spacing: -0.01em; }
+.settings-view .page-sub { margin: 0 0 22px; color: var(--text-dim, #8a8f98); font-size: 13px; }
+.settings-view .form-grid { display: grid; gap: 16px; }
+.field-hint { margin: 6px 0 0; font-size: 12px; color: var(--text-dim, #8a8f98); line-height: 1.45; }
+.form-actions { margin-top: 18px; }
+.panel { margin-top: 26px; border: 1px solid var(--border, #e4e4e4); border-radius: 10px; padding: 16px; }
+.panel-title { margin: 0 0 10px; font-size: 15px; }
+.reorg-list { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.reorg-row { display: flex; align-items: baseline; gap: 12px; font-size: 13px; padding: 8px 10px; border-radius: 8px; background: var(--bg-soft, #f6f6f7); }
+.reorg-when { flex: 0 0 150px; color: var(--text-dim, #8a8f98); font-size: 12px; }
+.reorg-what { flex: 1; }
+.reorg-trigger { flex: 0 0 auto; color: var(--text-dim, #8a8f98); font-size: 12px; }
+.provider-row { display: inline-flex; gap: 8px; }
+.provider-chip { font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border, #e4e4e4); color: var(--text-dim, #8a8f98); }
+.provider-chip.on { border-color: var(--accent, #2E6B4E); color: var(--accent, #2E6B4E); }

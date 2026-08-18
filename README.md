@@ -20,7 +20,7 @@ queue, Neo4j holds the graph. Everything is async — the ask path streams over 
 flowchart LR
     U[User question] --> R[Semantic router<br/>fast / standard / deep]
     R -->|fast| CHAT[Greet / chit-chat<br/>no retrieval]
-    R -->|standard / deep| CACHE[(Semantic cache<br/>Postgres, cosine >= 0.92)]
+    R -->|standard / deep| CACHE[(Semantic cache<br/>Postgres, cosine >= 0.92<br/>+ near-duplicate guard)]
     CACHE -->|hit| GEN2[Replay cached answer<br/>cached: true]
     CACHE -->|miss| RW[Query rewrite +<br/>metadata extraction]
     RW --> HY[Hybrid retrieval<br/>pgvector + FTS, RRF fusion]
@@ -29,7 +29,7 @@ flowchart LR
     RR --> PA[Parent expansion<br/>small-to-big context]
     PA --> CTX[assemble_context<br/>numbered sources]
     CTX --> GEN[Generation / ReAct agent]
-    GEN --> CC[Contradiction scan<br/>top-2 sources]
+    GEN --> CC[Contradiction scan<br/>embedding band 0.70-0.95<br/>top-2 fallback]
     CC --> SSE[SSE stream<br/>sources, thinking, tokens, citations, done]
     SSE --> CACHE2[(cache_store)]
 ```
@@ -41,15 +41,23 @@ flowchart LR
 2. **Extraction** — per file: PDFs via PyMuPDF, plain text, or **OCR fallback**
    (tesseract, `METIS_OCR_ENGINE=pytesseract`) when a PDF yields no text. Files that
    still come out empty get `extraction_status=empty` + a UI badge — never silent.
+   Knowledge-graph extraction is **tiered** (runtime-settable, default `t1`):
+   `t1` local regex per parent chunk (no API keys needed), `t2` t1 + LLM typed
+   relations over sampled 8000-char windows, `t3` LLM per parent (capped); t2/t3
+   fall back to t1 without keys. Entity/relation budgets bound the graph (200 each).
 3. **Chunking** (P3.1 parent-child) — parents ~2000 chars; children (~400 chars,
    60 overlap) are cut *from* parents. Children are embedded and searched; context
    blocks come from the parent (small-to-big).
 4. **Embedding** — children embedded with `bge-m3` (local CPU), images with CLIP;
    rows land in `chunks` / `parent_chunks` / `images`. `content_hash` dedupes
    re-uploads; `bump_corpus_version` invalidates stale caches.
-5. **Knowledge graph** — LLM entity/relation extraction (lazy toggle
-   `METIS_GRAPH_LLM_EXTRACT`) → Neo4j per-document graph; **GDS community detection**
-   + per-community LLM summaries power the global sensemaking view.
+5. **Knowledge graph** — tiered entity/relation extraction → Neo4j per-document
+   graph; **GDS community detection** + per-community LLM summaries power the global
+   sensemaking view. **Auto-reorg** (P8): after a successful batch the worker
+   re-detects communities and re-summarizes only the communities whose membership
+   changed (`members_hash` invalidation) — LLM spend is delta-only. Debounce policy,
+   min-docs threshold, and auto-toggle are runtime settings; every run lands in the
+   `reorg_runs` audit log (`/library/reorganizations`).
 6. **Progress** — per-file status pollable at `/ingest/{job_id}` (+ SSE stream).
 
 ### Ask pipeline (`app/rag/pipeline.py` + friends)
@@ -60,6 +68,10 @@ flowchart LR
 2. **Cache check** (`app/cache.py`) — the question is embedded; the nearest
    `cache_entries` row within cosine ≥ 0.92, corpus-scoped, 7-day TTL and matching
    `corpus_version` replays the prior answer (UI shows a "cached" badge) — zero LLM calls.
+   A **near-duplicate guard** (P8) blocks hits when the question text differs too
+   much from the cached one (token Jaccard ≥ 0.8, length ratio ≤ 1.5, capitalized-token
+   agreement): embedding-identical but entity-different questions never share a hit.
+   Loose paraphrases miss by design — a documented accuracy-vs-hit-rate tradeoff.
 3. **Retrieval** (`retrieve_context`) — optional LLM query rewrite, metadata-filter
    extraction (dates/tags), vector search (`<=>` pgvector) + keyword FTS fused with
    RRF; **graph boost** adds entity-neighbor chunks (2 hops, ≤10); cross-encoder
@@ -69,9 +81,11 @@ flowchart LR
    calling (the model itself calls `search_vault` / `graph_lookup` / `wikipedia`);
    otherwise the direct path. Any failure degrades to direct retrieval → context →
    generation — never an empty reply.
-6. **Contradiction scan** (`app/rag/contradiction.py`) — the top-2 chunks are checked
-   against Neo4j's persisted contradiction edges; new pairs get an LLM verdict.
-   Conflicts surface as a "sources disagree" alert.
+6. **Contradiction scan** (`app/rag/pipeline.py` + `contradiction.py`) — chunk
+   embeddings are compared pairwise; only pairs in the suspicious band
+   (cosine 0.70–0.95 — semantically near but not identical) reach the LLM judge
+   (≤ 4 pairs, persisted as Neo4j contradiction edges). Without embeddings it falls
+   back to judging the top-2 chunks. Conflicts surface as a "sources disagree" alert.
 7. **SSE stream** — `sources → thinking → tokens → citations → done`; answers +
    sources persisted per conversation.
 8. **Feedback** (P6) — thumbs-down re-embeds the question and **evicts semantically
@@ -85,12 +99,15 @@ for no-key dev and tests. Tasks route per provider (`generation→groq`,
 `METIS_EXTRACTION_PROVIDER`); each call walks a fallback chain and never splices
 mid-stream failures. Structured JSON-schema calls per task; per-request cost estimates.
 
-### Eval & CI
+### Eval gates
 
 Golden datasets (`app/evals/datasets.py`) → harness (`app/evals/runner.py`) →
-RAGAS-style metrics; `scripts/run_matrix.py` drives the config matrix; CI gates the
+RAGAS-style metrics; `scripts/run_matrix.py` drives the config matrix and gates the
 default config (faithfulness ≥ 0.90, context_precision ≥ 0.80, citation_correctness
-== 1.0). See Measured results below.
+== 1.0). The gate runs locally (a CI workflow was removed — the corpus-dependent
+matrix kept skipping on fresh CI databases); it enforces thresholds only when
+Postgres is reachable **and** the dataset's corpus is ingested, and exits 1 on any
+breach. See Measured results below.
 
 ### Repository layout
 
@@ -101,7 +118,7 @@ app/
   rag/            router, retrieval, rerank, context, agent, contradiction, vision
   graph/          Neo4j store, extraction, communities (GDS)
   evals/          golden datasets, metrics, runner
-  workers/        arq ingest job
+  workers/        arq jobs (ingest, auto-reorg) + runtime settings store
   static/         dependency-free vanilla-JS SPA (served at /)
 scripts/          run_matrix, frontend_qa
 tests/            pytest suite — mock models/LLMs, DB-gated fixtures
@@ -160,6 +177,11 @@ vanilla ES modules + CSS custom properties).
   a single canvas with vault-colored clusters and dashed cross-vault edges, live vault
   filters, and a **Surprises** tab that mines the graph for connections between vaults
   (shared concepts + cross-vault links) narrated in one LLM call.
+- **Settings** — runtime settings (`#/settings`, `app_settings` table, no redeploy):
+  graph extraction mode (`t1`/`t2`/`t3`) and LLM window count, auto-reorg toggle +
+  debounce policy (`batch`/`debounced`/`nightly`) + min-docs threshold, plus the reorg
+  audit log (every community-detection run, manual or automatic) with a "run
+  reorganization now" button.
 - **Idea journeys** — pick any two entities (search-as-you-type pickers) and Metis finds
   the shortest path between them across all vaults, highlights it on the graph, and
   narrates the journey as a short story.
@@ -201,6 +223,9 @@ uv run python scripts/frontend_qa.py
 | `/library/surprises` | GET | Mined cross-vault connections with LLM narratives |
 | `/library/journey` | GET | Shortest entity path across vaults + narrated story |
 | `/library/entities` | GET | Entity search for the journey pickers |
+| `/settings` | GET/PUT | Runtime settings (`app_settings` overrides, env defaults) |
+| `/library/reorganizations` | GET | Auto-reorg audit log (every run, manual or automatic) |
+| `/graph/communities` | POST | Manual community detection + summary refresh (logged) |
 | `/evals/run` | POST | Run the eval harness |
 | `/evals/reports` | GET | Past eval runs + metrics |
 
