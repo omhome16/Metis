@@ -69,7 +69,7 @@ async def _last_run(session) -> datetime | None:
 
 async def _count_communities(store) -> int:
     try:
-        async with store._driver.session() as session:
+        async with store.session() as session:
             rec = await (
                 await session.run(
                     "MATCH (e:Entity) WHERE e.community_id IS NOT NULL "

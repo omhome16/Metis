@@ -2,6 +2,10 @@
 
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import delete, select
+
+from app.db.models import ReorgRun
+from app.db.session import async_session_factory
 from app.workers.reorg import record_reorg_run, should_run
 
 _NOW = datetime(2026, 8, 18, 12, 0, tzinfo=UTC)
@@ -26,15 +30,26 @@ def test_should_run_nightly():
 
 
 async def test_reorg_log_endpoint_records_runs(require_db, client):
-    await record_reorg_run("auto", 3, 2, 4, 1, {"detected": {"engine": "lpa"}})
-    r = await client.get("/api/v1/library/reorganizations")
-    assert r.status_code == 200
-    runs = r.json()["runs"]
-    assert runs, "reorg log must contain the recorded run"
-    latest = runs[0]
-    assert latest["triggered_by"] == "auto"
-    assert latest["docs_since_last"] == 3
-    assert latest["communities_before"] == 2
-    assert latest["communities_after"] == 4
-    assert latest["summaries_made"] == 1
-    assert latest["detail"]["detected"]["engine"] == "lpa"
+    # snapshot existing rows so the test leaves no trace: a leftover ReorgRun
+    # would pollute the audit log AND suppress real auto-reorgs via `_last_run`
+    async with async_session_factory() as session:
+        before = set((await session.execute(select(ReorgRun.id))).scalars().all())
+    try:
+        await record_reorg_run("auto", 3, 2, 4, 1, {"detected": {"engine": "lpa"}})
+        r = await client.get("/api/v1/library/reorganizations")
+        assert r.status_code == 200
+        runs = r.json()["runs"]
+        assert runs, "reorg log must contain the recorded run"
+        latest = runs[0]
+        assert latest["triggered_by"] == "auto"
+        assert latest["docs_since_last"] == 3
+        assert latest["communities_before"] == 2
+        assert latest["communities_after"] == 4
+        assert latest["summaries_made"] == 1
+        assert latest["detail"]["detected"]["engine"] == "lpa"
+    finally:
+        async with async_session_factory() as session:
+            existing = set((await session.execute(select(ReorgRun.id))).scalars().all())
+            for row_id in existing - before:
+                await session.execute(delete(ReorgRun).where(ReorgRun.id == row_id))
+            await session.commit()

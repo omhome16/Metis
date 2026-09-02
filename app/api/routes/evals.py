@@ -1,7 +1,5 @@
 """Eval harness endpoints: run a dataset + config, list past reports, review feedback."""
 
-from typing import Annotated
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -42,7 +40,7 @@ async def reports(limit: int = 10, session: AsyncSession = Depends(get_session))
 @router.get("/feedback")
 async def feedback_log(
     limit: int = Query(50, ge=1, le=500),
-    session: Annotated[AsyncSession, Depends(get_session)] = None,
+    session: AsyncSession = Depends(get_session),
 ) -> dict:
     """Feedback surfaced for eval tooling (P6): totals + recent rows with context."""
     counts = dict(

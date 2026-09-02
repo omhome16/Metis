@@ -6,10 +6,12 @@ share a single event loop — avoids SQLAlchemy pool cross-loop errors.
 
 import os
 
-os.environ.setdefault("METIS_ENV", "test")
-os.environ.setdefault("METIS_EMBED_MODEL", "mock")  # never download weights in tests
-os.environ.setdefault("METIS_RERANK_MODEL", "mock")
-os.environ.setdefault("METIS_CLIP_MODEL", "mock")
+# Hard assignment (not setdefault): the "tests never download model weights"
+# guarantee must hold even when the developer's shell exports these vars.
+os.environ["METIS_ENV"] = "test"
+os.environ["METIS_EMBED_MODEL"] = "mock"
+os.environ["METIS_RERANK_MODEL"] = "mock"
+os.environ["METIS_CLIP_MODEL"] = "mock"
 
 import asyncio  # noqa: E402
 
@@ -66,7 +68,7 @@ TEST_GRAPH_CORPORA = ("test-graph", "GraphVault", "Lib")
 
 async def _wipe_test_graph(store) -> None:
     """Remove only test corpora from Neo4j; then sweep doc-less chunks/images and orphaned entities."""
-    async with store._driver.session() as session:
+    async with store.session() as session:
         await session.run(
             "MATCH (d:Document) WHERE d.corpus IN $corpora DETACH DELETE d", corpora=list(TEST_GRAPH_CORPORA)
         )

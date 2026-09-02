@@ -166,7 +166,7 @@ export class ForceGraph {
     const n = this.nodes;
     if (!n.length) return false;
 
-    const cx = (this.view.x - this.view.x); // gravity target is view center in world coords
+    // gravity target is the world origin
     const gx = 0, gy = 0;
 
     // pair repulsion

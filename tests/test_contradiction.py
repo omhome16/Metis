@@ -12,6 +12,8 @@ from app.rag.retrieval import ChunkHit
 def test_parse_citations():
     assert parse_citations("The answer is four [1][2] and also [7].") == {1, 2, 7}
     assert parse_citations("No citations here.") == set()
+    # composite markers render as chips in the frontend — they must ground too
+    assert parse_citations("Both agree [1, 2] and [3,4] here.") == {1, 2, 3, 4}
 
 
 async def test_check_contradiction_mock():
@@ -134,3 +136,64 @@ async def test_contradiction_scan_judges_only_suspicious_band(require_db, requir
     alert = await contradiction_scan(gw, hits)
     assert alert is None  # judge says no conflict
     assert gw.calls == 1  # only the (c1, c2) pair — c3 never reached the LLM
+
+    await _cleanup_contra(doc_id)
+
+
+async def test_contradiction_scan_skips_judge_when_band_clear(require_db, require_graph):
+    """Embeddings complete + nothing in the suspicious band → zero judge calls.
+
+    Different subjects must not burn judge quota just because a top-2 fallback
+    exists; the fallback only applies when embeddings are unavailable.
+    """
+    doc_id = str(uuid.uuid4())
+    c1, c2 = str(uuid.uuid4()), str(uuid.uuid4())
+    async with async_session_factory() as session:
+        session.add(Document(id=doc_id, title="t", corpus="test-contra"))
+        session.add(
+            Chunk(
+                id=c1,
+                doc_id=doc_id,
+                text="Earth is flat.",
+                chunk_index=0,
+                tokens=5,
+                embedding=_vec(1.0),
+            )
+        )
+        session.add(
+            Chunk(
+                id=c2,
+                doc_id=doc_id,
+                text="Pasta is delicious.",
+                chunk_index=1,
+                tokens=5,
+                embedding=_vec(0.1),
+            )
+        )
+        await session.commit()
+    hits = [
+        ChunkHit(
+            chunk=Chunk(id=c1, doc_id=doc_id, text="Earth is flat.", chunk_index=0, tokens=5),
+            score=0.9,
+            doc_title="t",
+        ),
+        ChunkHit(
+            chunk=Chunk(id=c2, doc_id=doc_id, text="Pasta is delicious.", chunk_index=1, tokens=5),
+            score=0.8,
+            doc_title="t",
+        ),
+    ]
+    gw = CountingGateway()
+    assert await contradiction_scan(gw, hits) is None
+    assert gw.calls == 0  # pre-filter cleared every pair → judge never invoked
+
+    await _cleanup_contra(doc_id)
+
+
+async def _cleanup_contra(doc_id: str) -> None:
+    from sqlalchemy import delete
+
+    async with async_session_factory() as session:
+        await session.execute(delete(Chunk).where(Chunk.doc_id == doc_id))
+        await session.execute(delete(Document).where(Document.id == doc_id))
+        await session.commit()

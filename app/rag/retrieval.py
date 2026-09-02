@@ -216,8 +216,8 @@ def _meta_date(value) -> str | None:
     """Normalize a date-ish value to 'YYYY-MM-DD' (best-effort)."""
     if not value:
         return None
-    text = str(value).strip()[:10]
-    return text if len(text) == 10 and text[4] == "-" and text[7] == "-" else None
+    s = str(value).strip()[:10]
+    return s if len(s) == 10 and s[4] == "-" and s[7] == "-" else None
 
 
 def _meta_datetime(value: str | None) -> datetime | None:
@@ -273,19 +273,33 @@ def _apply_meta_filters_sql(sql: str, params: dict, meta: dict | None) -> tuple[
     return sql, params
 
 
-def fuse_hybrid(vector_hits: list[ChunkHit], keyword_hits: list[ChunkHit], top_k: int = 20, k: int = 60) -> list[ChunkHit]:
-    """Reciprocal Rank Fusion over the ranked lists from each retriever."""
+def fuse_hybrid(
+    vector_hits: list[ChunkHit], keyword_hits: list[ChunkHit], top_k: int = 20, k: int = 60
+) -> list[ChunkHit]:
+    """Reciprocal Rank Fusion over the ranked lists from each retriever.
+
+    Returns NEW ChunkHit objects carrying the fused RRF score — the inputs are
+    left untouched so callers keep their original cosine/ts_rank scores.
+    """
     scores: dict[str, float] = {}
     for ranked in (vector_hits, keyword_hits):
         for i, hit in enumerate(ranked):
             scores[hit.chunk.id] = scores.get(hit.chunk.id, 0.0) + 1.0 / (k + i + 1)
-    by_id = {hit.chunk.id: hit for hit in [*vector_hits, *keyword_hits]}
+    by_id: dict[str, ChunkHit] = {}
+    for hit in [*vector_hits, *keyword_hits]:
+        by_id.setdefault(hit.chunk.id, hit)  # first list (vector) wins ties
     ordered = sorted(scores.items(), key=lambda kv: -kv[1])[:top_k]
     result: list[ChunkHit] = []
     for chunk_id, score in ordered:
         hit = by_id[chunk_id]
-        hit.score = round(score, 4)
-        result.append(hit)
+        result.append(
+            ChunkHit(
+                chunk=hit.chunk,
+                score=round(score, 4),
+                doc_title=hit.doc_title,
+                rerank_score=hit.rerank_score,
+            )
+        )
     return result
 
 

@@ -30,7 +30,8 @@ def _is_retryable(exc: Exception) -> bool:
     return isinstance(exc, (TimeoutError, ConnectionError, OSError))
 
 
-# task → preferred provider
+# task → preferred provider. Tasks NOT listed here (e.g. "router", "query_metadata")
+# intentionally ride `primary_provider`.
 TASK_PROVIDER: dict[str, str] = {
     "generation": "groq",
     "fast": "groq",
@@ -43,7 +44,8 @@ TASK_PROVIDER: dict[str, str] = {
 PRICING: dict[str, tuple[float, float]] = {
     "llama-3.3-70b-versatile": (0.59, 0.79),
     "llama-3.1-8b-instant": (0.05, 0.08),
-    "gemini-2.5-flash": (0.30, 2.50),
+    "gemini-flash-latest": (0.30, 2.50),  # live alias configured by default
+    "gemini-2.5-flash": (0.30, 2.50),  # retired for new accounts; priced for old configs
 }
 
 

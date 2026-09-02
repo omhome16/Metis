@@ -48,7 +48,7 @@ async def _gds_available(session) -> bool:
 async def _load_edges(store: GraphStore) -> list[tuple[str, str, float]]:
     """Undirected, weight-aggregated entity-entity edges (deterministic order)."""
     agg: dict[tuple[str, str], float] = defaultdict(float)
-    async with store._driver.session() as session:
+    async with store.session() as session:
         result = await session.run(
             "MATCH (a:Entity)-[r:RELATED_TO]->(b:Entity) "
             "RETURN a.canonical AS src, b.canonical AS tgt, coalesce(r.weight, 1.0) AS w"
@@ -99,7 +99,7 @@ def _label_propagation(nodes: list[str], edges: list[tuple[str, str, float]]) ->
 
 
 async def _write_assignments(store: GraphStore, rows: list[dict[str, Any]]) -> None:
-    async with store._driver.session() as session:
+    async with store.session() as session:
         for start in range(0, len(rows), _BATCH):
             await session.run(
                 "UNWIND $rows AS r "
@@ -112,7 +112,7 @@ async def _write_assignments(store: GraphStore, rows: list[dict[str, Any]]) -> N
 async def _detect_with_lpa(store: GraphStore) -> dict:
     edges = await _load_edges(store)
     all_names: set[str] = set()
-    async with store._driver.session() as session:
+    async with store.session() as session:
         result = await session.run("MATCH (e:Entity) RETURN e.canonical AS name")
         async for rec in result:
             if rec["name"]:
@@ -176,7 +176,7 @@ async def _detect_with_gds(store: GraphStore, session) -> dict:
 async def detect_communities(store: GraphStore) -> dict:
     """Assign community_id + community_rank to every Entity node. Never raises."""
     try:
-        async with store._driver.session() as session:
+        async with store.session() as session:
             if await _gds_available(session):
                 try:
                     return await _detect_with_gds(store, session)
@@ -192,7 +192,7 @@ async def detect_communities(store: GraphStore) -> dict:
 
 
 async def _community_has_summary(store: GraphStore, community_id: str) -> bool:
-    async with store._driver.session() as session:
+    async with store.session() as session:
         result = await session.run(
             "MATCH (c:Community {id: $id}) WHERE c.summary IS NOT NULL RETURN count(c) AS n",
             id=community_id,
@@ -210,7 +210,7 @@ async def invalidate_stale_summaries(store: GraphStore) -> int:
     never raises (a reorg must survive a bad query).
     """
     try:
-        async with store._driver.session() as session:
+        async with store.session() as session:
             result = await session.run(
                 "MATCH (e:Entity) WHERE e.community_id IS NOT NULL "
                 "WITH e.community_id AS cid, collect(e.canonical) AS members "
@@ -218,7 +218,7 @@ async def invalidate_stale_summaries(store: GraphStore) -> int:
             )
             rows = [(rec["cid"], sorted(rec["members"])) async for rec in result]
         invalidated = 0
-        async with store._driver.session() as session:
+        async with store.session() as session:
             for cid, members in rows:
                 digest = hashlib.sha256(
                     json.dumps(members, ensure_ascii=False).encode()
@@ -247,7 +247,7 @@ async def invalidate_stale_summaries(store: GraphStore) -> int:
 async def _evidence_snippets(store: GraphStore, members: list[str]) -> list[str]:
     """A few chunk snippets where top members are mentioned (deterministic order)."""
     snippets: list[str] = []
-    async with store._driver.session() as session:
+    async with store.session() as session:
         result = await session.run(
             "UNWIND $names AS name "
             "MATCH (e:Entity {canonical: name})-[:MENTIONS]-(c:Chunk) "
@@ -284,7 +284,7 @@ async def _summarize_one(gateway: LLMGateway, store: GraphStore, community: dict
 
 async def summarize_communities(gateway: LLMGateway, store: GraphStore) -> dict:
     """One LLM call per community; MERGE :Community nodes. Idempotent per community."""
-    async with store._driver.session() as session:
+    async with store.session() as session:
         result = await session.run(
             "MATCH (e:Entity) WHERE e.community_id IS NOT NULL "
             "WITH e.community_id AS cid, collect(e.canonical) AS names, "
@@ -316,7 +316,7 @@ async def summarize_communities(gateway: LLMGateway, store: GraphStore) -> dict:
         except Exception as exc:  # noqa: BLE001 — one bad community must not kill the job
             logger.warning("community summary failed for %s: %s", community["id"], exc)
             continue
-        async with store._driver.session() as session:
+        async with store.session() as session:
             await session.run(
                 "MERGE (c:Community {id: $id}) "
                 "SET c.summary = $summary, c.entity_count = $count, c.members = $members",

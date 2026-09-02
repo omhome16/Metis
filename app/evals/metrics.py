@@ -143,9 +143,20 @@ async def context_recall(gateway, ground_truth: str, contexts: list[str]) -> flo
     return round(present / len(claims), 4)
 
 
+_CITE_RE = re.compile(r"\[(\d{1,3}(?:\s*,\s*\d{1,3})*)\]")
+
+
+def _parsed_citations(answer: str) -> set[int]:
+    """[n] markers in the answer — bare ([1]) or comma-separated ([1, 2])."""
+    numbers: set[int] = set()
+    for group in _CITE_RE.findall(answer):
+        numbers.update(int(n) for n in re.findall(r"\d{1,3}", group))
+    return numbers
+
+
 def citation_correctness(answer: str, context_ids: list[str]) -> tuple[float, dict]:
     """Fraction of [n] citations in the answer that map to a retrieved chunk."""
-    parsed = sorted({int(n) for n in re.findall(r"\[(\d{1,3})\]", answer)})
+    parsed = sorted(_parsed_citations(answer))
     if not parsed:
         return 0.0, {"emitted": 0, "valid": 0}
     valid = sum(1 for n in parsed if 1 <= n <= len(context_ids))

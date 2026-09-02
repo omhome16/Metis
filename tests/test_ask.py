@@ -140,6 +140,41 @@ async def test_ask_emits_meta_event_with_filters(client, require_db):
     await _cleanup(corpus)
 
 
+async def test_ask_rejects_cross_vault_conversation(client, require_db):
+    """A conversation belongs to one vault — asking against another vault must 404,
+    never silently mix cross-vault history into the prompt."""
+    corpus_a = f"test-conv-a-{uuid.uuid4().hex[:8]}"
+    corpus_b = f"test-conv-b-{uuid.uuid4().hex[:8]}"
+    try:
+        async with async_session_factory() as session:
+            from app.db.models import Conversation
+
+            conv = Conversation(vault_name=corpus_a, title="A")
+            session.add(conv)
+            await session.commit()
+            conv_id = conv.id
+        with patch("app.api.routes.ask.get_gateway", return_value=FakeGateway()):
+            resp = await client.post(
+                "/api/v1/ask",
+                json={
+                    "question": "Who wrote The Art of War?",
+                    "corpus": corpus_b,
+                    "conversation_id": conv_id,
+                },
+            )
+        assert resp.status_code == 404
+    finally:
+        async with async_session_factory() as session:
+            from sqlalchemy import delete as _delete
+
+            from app.db.models import Conversation
+
+            await session.execute(_delete(Conversation).where(Conversation.id == conv_id))
+            await session.commit()
+        await _cleanup(corpus_a)
+        await _cleanup(corpus_b)
+
+
 _PNG = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
     "0000000d49444154789c626001000000ffff03000006000557bfabd40000000049454e44ae426082"

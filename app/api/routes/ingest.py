@@ -60,33 +60,47 @@ async def ingest_files(
     job_dir.mkdir(parents=True, exist_ok=True)
 
     added = 0
+    rows: list[dict] = []
+    seen_hashes: set[str] = set()
     for upload in files:
         fmt = infer_format(upload.filename)
         if fmt is None:
             raise HTTPException(status_code=400, detail=f"Unsupported file type: {upload.filename}")
         content = await _read_limited(upload)
         digest = hashlib.sha256(content).hexdigest()
-        # Idempotent ingestion: same bytes → skip.
+        # Idempotent ingestion: same bytes (already stored, or twice in this
+        # batch) → skip.
         existing = (
             await session.execute(select(Document).where(Document.content_hash == digest))
         ).scalar_one_or_none()
-        if existing:
+        if existing or digest in seen_hashes:
             logger.info("duplicate skipped: %s", upload.filename)
             continue
+        seen_hashes.add(digest)
         path = job_dir / f"{uuid.uuid4().hex}{Path(upload.filename).suffix}"
         path.write_bytes(content)
-        session.add(
-            Document(
-                id=str(uuid.uuid4()),
-                title=Path(upload.filename).stem,
-                corpus=corpus,
-                format=fmt,
-                content_hash=digest,
-                ingest_job_id=job_id,
-                file_path=path.as_posix(),
-            )
+        rows.append(
+            {
+                "id": str(uuid.uuid4()),
+                "title": Path(upload.filename).stem,
+                "corpus": corpus,
+                "format": fmt,
+                "content_hash": digest,
+                "ingest_job_id": job_id,
+                "file_path": path.as_posix(),
+            }
         )
-        added += 1
+
+    if rows:
+        # Atomic insert: a concurrent upload of the same bytes conflicts on the
+        # content_hash unique index and is skipped here instead of raising (500).
+        result = await session.execute(
+            pg_insert(Document)
+            .values(rows)
+            .on_conflict_do_nothing(index_elements=["content_hash"])
+            .returning(Document.id)
+        )
+        added = len(result.all())
 
     await session.commit()
     await enqueue_ingest_job(job_id)

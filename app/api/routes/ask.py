@@ -89,6 +89,9 @@ async def ask(request: AskRequest, session: AsyncSession = Depends(get_session))
     if request.conversation_id:
         conversation = await session.get(Conversation, request.conversation_id)
         if conversation is not None:
+            if conversation.vault_name != corpus:
+                # A conversation belongs to one vault — never mix cross-vault history.
+                raise HTTPException(status_code=404, detail="conversation not found in this vault")
             rows = (
                 (
                     await session.execute(
@@ -247,6 +250,7 @@ async def _feedback_context(session: AsyncSession, msg: Message) -> tuple[str | 
     corpus = conv.vault_name if conv else None
     if msg.role == "user":
         return corpus, msg.content
+    # role tie-break below: 'user' sorts after 'assistant' at identical timestamps
     prior = (
         (
             await session.execute(
@@ -257,7 +261,7 @@ async def _feedback_context(session: AsyncSession, msg: Message) -> tuple[str | 
                     Message.id != msg.id,
                     Message.created_at <= msg.created_at,
                 )
-                .order_by(Message.created_at.desc(), Message.id.desc())
+                .order_by(Message.created_at.desc(), Message.role.desc())
                 .limit(1)
             )
         )
@@ -278,9 +282,15 @@ async def submit_feedback(
     if msg is None:
         raise HTTPException(status_code=404, detail="message not found")
     existing = (
-        (await session.execute(select(Feedback).where(Feedback.message_id == message_id)))
+        (
+            await session.execute(
+                select(Feedback)
+                .where(Feedback.message_id == message_id)
+                .order_by(Feedback.created_at.desc())  # "latest wins" — tolerate stray duplicates
+            )
+        )
         .scalars()
-        .one_or_none()
+        .first()
     )
     if existing is not None:
         existing.rating = payload.rating

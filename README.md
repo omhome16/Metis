@@ -58,7 +58,7 @@ flowchart LR
    changed (`members_hash` invalidation) — LLM spend is delta-only. Debounce policy,
    min-docs threshold, and auto-toggle are runtime settings; every run lands in the
    `reorg_runs` audit log (`/library/reorganizations`).
-6. **Progress** — per-file status pollable at `/ingest/{job_id}` (+ SSE stream).
+6. **Progress** — per-file status pollable at `/ingest/{job_id}` (job row in Postgres, polled by the UI).
 
 ### Ask pipeline (`app/rag/pipeline.py` + friends)
 

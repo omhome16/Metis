@@ -59,6 +59,8 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
+    volumes:
+      - uploads:/app/uploads   # worker reads files the API writes — must be shared
     depends_on:
       db:
         condition: service_healthy
@@ -72,6 +74,8 @@ services:
     container_name: metis-worker
     env_file: .env
     command: arq app.workers.settings.WorkerSettings
+    volumes:
+      - uploads:/app/uploads   # same upload dir as the api service
     depends_on:
       db:
         condition: service_healthy
@@ -84,3 +88,4 @@ volumes:
   pgdata:
   redisdata:
   graphdata:
+  uploads:

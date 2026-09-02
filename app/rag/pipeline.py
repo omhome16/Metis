@@ -207,8 +207,10 @@ async def contradiction_scan(
 async def _candidate_pairs(hits: list[ChunkHit]) -> list[tuple[Chunk, Chunk]]:
     """Embedding pre-filter: pairs in the suspicious similarity band, most-alike first.
 
-    Falls back to the top-2 pair when embeddings are unavailable (e.g. agent
-    sources reconstructed without vectors) so the old behavior never regresses.
+    Falls back to the top-2 pair only when embeddings are unavailable (e.g. agent
+    sources reconstructed without vectors) so the old safety net survives; when
+    embeddings are complete and NO pair is in the band, return [] — different
+    subjects never cost an LLM judge call.
     """
     ids = [h.chunk.id for h in hits if h.chunk.id]
     if not ids:
@@ -232,10 +234,13 @@ async def _candidate_pairs(hits: list[ChunkHit]) -> list[tuple[Chunk, Chunk]]:
             sim = _cosine_sim(va, vb)
             if _CONTRADICTION_BAND[0] <= sim <= _CONTRADICTION_BAND[1]:
                 pairs.append((sim, a, b))
-    if not pairs:
+    if pairs:
+        pairs.sort(key=lambda p: -p[0])
+        return [(a, b) for _, a, b in pairs[:_CONTRADICTION_MAX_PAIRS]]
+    if len(embeddings) < len(ids):
+        # some vectors missing → the pre-filter is blind; keep the top-2 safety net
         return [(hits[0].chunk, hits[1].chunk)]
-    pairs.sort(key=lambda p: -p[0])
-    return [(a, b) for _, a, b in pairs[:_CONTRADICTION_MAX_PAIRS]]
+    return []
 
 
 def _cosine_sim(a: list[float], b: list[float]) -> float:

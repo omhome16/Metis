@@ -146,6 +146,16 @@ class Settings(BaseSettings):
         """Treat whitespace-only values (e.g. `KEY=   # comment`) as unset."""
         return v.strip() if isinstance(v, str) else v
 
+    @field_validator("db_url", mode="after")
+    @classmethod
+    def _asyncpg_driver(cls, v: str) -> str:
+        """Cloud hosts (Render/Heroku) inject plain `postgres(ql)://` DSNs — the async
+        engine requires the `postgresql+asyncpg://` scheme, so rewrite it here."""
+        for prefix in ("postgresql://", "postgres://"):
+            if v.startswith(prefix):
+                return "postgresql+asyncpg://" + v[len(prefix) :]
+        return v
+
     @property
     def is_test(self) -> bool:
         return self.env == "test"

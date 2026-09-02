@@ -141,7 +141,8 @@ class IngestJob(Base):
 
 
 class CorpusVersion(Base):
-    """Monotonic version per corpus, bumped on every successful ingest/delete."""
+    """Monotonic version per corpus, bumped whenever any document is indexed
+    (even in a partially-failed batch) or deleted — invalidates semantic caches."""
 
     __tablename__ = "corpus_versions"
 

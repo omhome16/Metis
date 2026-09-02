@@ -18,7 +18,7 @@ miss. Hits replay the exact SSE contract with `cached: true`.
 import re
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -167,6 +167,9 @@ async def cache_store(
             expires_at=_now() + timedelta(days=settings.cache_ttl_days),
         )
         session.add(entry)
+        # opportunistic sweep: expired rows are unreachable at lookup but would
+        # otherwise pile up forever
+        await session.execute(delete(CacheEntry).where(CacheEntry.expires_at <= _now()))
         await session.commit()
     except Exception as exc:  # noqa: BLE001
         logger.warning("cache store failed: %s", exc)

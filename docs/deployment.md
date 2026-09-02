@@ -12,7 +12,17 @@ uv run arq app.workers.settings.WorkerSettings   # ingestion/evals worker
 ```
 
 All 5 services (api/worker/db/cache/graph) can also run fully containerized:
-`docker compose up --build -d`.
+`docker compose up --build -d`. The `api` and `worker` services share the
+`uploads` volume so the worker can read the files the API stores — keep that
+volume mounted if you customize the compose file.
+
+## Security note (public deploys)
+
+The API has **no authentication** — every endpoint (ingest, vault delete,
+settings, `POST /graph/communities`) is open. That is intentional for
+localhost/single-user use; before exposing Metis publicly, put it behind your
+own gate (reverse-proxy auth, VPN, or an identity proxy). The per-IP rate
+limiter (`METIS_RATE_LIMIT_MAX`) is abuse protection, not access control.
 
 ## Environment variables (all `METIS_*` except LLM keys)
 
@@ -27,9 +37,10 @@ All 5 services (api/worker/db/cache/graph) can also run fully containerized:
 | `METIS_OLLAMA_BASE_URL` / `METIS_OLLAMA_TOOLS` | `http://localhost:11434/v1` / `false` | ollama endpoint; `true` only for tool-capable tags |
 | `METIS_OCR_ENGINE` | (empty) | `pytesseract` enables OCR of zero-text PDFs; requires the **tesseract binary** on PATH |
 | `METIS_PARENT_CHILD` / `METIS_PARENT_SIZE` | `true` / `2000` | Parent-child chunking kill switch |
-| `METIS_ROUTER_ENABLED` | — | Semantic router lanes kill switch |
+| `METIS_ROUTER_LLM` | `false` | One extra LLM call to refine the semantic router's lane decision (heuristic-only when false) |
+| `METIS_QUERY_REWRITE` / `METIS_METADATA_FILTER` / `METIS_RERANK_ENABLED` | `true` | Retrieval-pipeline toggles (also per-eval config overrides) |
 | `METIS_EMBED_MODEL` / `METIS_RERANK_MODEL` / `METIS_CLIP_MODEL` | bge-m3 / bge-reranker-base / clip-ViT-B-32 | Local CPU models |
-| `METIS_DB_URL` / `METIS_REDIS_URL` / `METIS_NEO4J_*` | — | Infra endpoints |
+| `METIS_DB_URL` / `METIS_REDIS_URL` / `METIS_NEO4J_*` | — | Infra endpoints. A plain `postgresql://` DSN (as injected by Render) is rewritten to `postgresql+asyncpg://` automatically |
 
 ## OCR
 
@@ -68,6 +79,9 @@ run deliberately before pushing**:
    Set `METIS_NEO4J_URI`, `METIS_NEO4J_USER`, `METIS_NEO4J_PASSWORD`.
 3. **API + worker** — the Dockerfile runs both; Render starts `web` with uvicorn and
    `worker` with arq. `GROQ_API_KEY` / `GEMINI_API_KEY` are set in the dashboard.
+   **Caveat:** Render `web` and `worker` are separate hosts with no shared disk, so
+   the worker cannot read uploaded files — file ingest only works when the API and
+   worker share an `uploads` volume (docker compose) or a single service.
 4. **Migrations** — run once against the managed DB:
    `uv run alembic upgrade head` (locally with `METIS_DB_URL` pointed at Render).
 5. **First boot** — `POST /api/v1/ingest` a document; the worker embeds it with the
@@ -83,8 +97,9 @@ run deliberately before pushing**:
 ## Cost notes
 
 - Embeddings / reranker / CLIP run **locally (free)** in the container.
-- LLM calls go through Groq + Gemini free tiers; the semantic cache (Redis) reduces
-  repeat spend, and `/evals/run` reports `cost_total_usd` per config so you can watch it.
+- LLM calls go through Groq + Gemini free tiers; the semantic cache (Postgres,
+  versioned + TTL'd) reduces repeat spend, and `/evals/run` reports `cost_total_usd`
+  per config so you can watch it.
 - Local ollama models cost CPU/VRAM only — useful as a fallback when free tiers
   are exhausted (see `METIS_JUDGE_PROVIDER`/`METIS_EXTRACTION_PROVIDER`).
 - Langfuse tracing is optional; unset keys disable it with no behavior change.

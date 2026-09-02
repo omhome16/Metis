@@ -41,9 +41,9 @@ export async function renderAsk(container, vault) {
   composer.append(ta, attachRow, foot);
   chat.append(composer);
 
-  // image attach
+  // image attach — lives inside the view (not document.body) so it's discarded on unmount
   const fileInput = el("input", { type: "file", accept: "image/*", class: "sr-only" });
-  document.body.append(fileInput);
+  composer.append(fileInput);
   let attachedImage = null; // data URL
   attachBtn.addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", async () => {

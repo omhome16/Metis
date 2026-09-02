@@ -55,6 +55,10 @@ class GraphStore:
     async def close(self) -> None:
         await self._driver.close()
 
+    def session(self):
+        """Public session context manager so callers don't reach into `_driver`."""
+        return self._driver.session()
+
     async def ping(self) -> bool:
         try:
             await self._driver.verify_connectivity()
@@ -270,24 +274,29 @@ class GraphStore:
         if not entity_names:
             return []
         names = [n for n in entity_names if normalize_entity_name(n)]
+        if not names:
+            return []
+        # LLM-extracted names vary in case/punctuation — match both the canonical
+        # key and the display name.
+        keys = [normalize_entity_name(n) for n in names]
         if max_hops >= 2:
             query = (
                 "MATCH (e:Entity)-[:RELATED_TO*1..2]-(e2:Entity)-[:MENTIONS]-(c:Chunk) "
-                "WHERE e.canonical IN $names OR e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit "
+                "WHERE e.canonical IN $keys OR e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit "
                 "UNION "
                 "MATCH (e:Entity)-[:MENTIONED_IN]->(:Document)-[:CONTAINS]->(c:Chunk) "
-                "WHERE e.canonical IN $names OR e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit"
+                "WHERE e.canonical IN $keys OR e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit"
             )
         else:
             query = (
                 "MATCH (e:Entity)-[:MENTIONS]-(c:Chunk) "
-                "WHERE e.canonical IN $names OR e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit "
+                "WHERE e.canonical IN $keys OR e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit "
                 "UNION "
                 "MATCH (e:Entity)-[:MENTIONED_IN]->(:Document)-[:CONTAINS]->(c:Chunk) "
-                "WHERE e.canonical IN $names OR e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit"
+                "WHERE e.canonical IN $keys OR e.name IN $names RETURN DISTINCT c.id AS id LIMIT $limit"
             )
         async with self._driver.session() as session:
-            result = await session.run(query, names=names, limit=limit)
+            result = await session.run(query, names=names, keys=keys, limit=limit)
             return [record["id"] async for record in result]
 
     async def connections(self, from_name: str, to_name: str, max_paths: int = 3) -> list[dict]:

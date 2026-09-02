@@ -46,7 +46,7 @@ def global_intent(question: str) -> bool:
 async def load_communities(store, budget: int | None = None) -> list[dict]:
     """Top-k communities (by entity count) that already have summaries."""
     budget = max(1, int(budget or settings.global_relevance_budget))
-    async with store._driver.session() as session:
+    async with store.session() as session:
         result = await session.run(
             "MATCH (c:Community) WHERE c.summary IS NOT NULL "
             "RETURN c.id AS id, c.summary AS summary, c.entity_count AS entity_count, "

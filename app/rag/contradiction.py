@@ -34,9 +34,16 @@ async def check_contradiction(gateway: LLMGateway, text_a: str, text_b: str) -> 
         return {"contradicts": False, "reason": ""}
 
 
-_CITE_RE = re.compile(r"\[(\d{1,3})\]")
+_CITE_RE = re.compile(r"\[(\d{1,3}(?:\s*,\s*\d{1,3})*)\]")
 
 
 def parse_citations(answer: str) -> set[int]:
-    """Extract the [n] citation markers actually emitted in the answer."""
-    return {int(n) for n in _CITE_RE.findall(answer)}
+    """Extract the [n] citation markers actually emitted in the answer.
+
+    Handles bare markers (`[1]`) and comma-separated ones (`[1, 2]`) — the
+    frontend renders both as citation chips.
+    """
+    numbers: set[int] = set()
+    for group in _CITE_RE.findall(answer):
+        numbers.update(int(n) for n in re.findall(r"\d{1,3}", group))
+    return numbers
