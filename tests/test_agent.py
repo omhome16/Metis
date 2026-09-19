@@ -23,12 +23,20 @@ class ToolGateway:
     async def chat_stream(self, task, messages, temperature=0.7, max_tokens=None):
         yield "fallback"
 
-    async def chat_tools_stream(self, task, messages, tools, temperature=0.7, max_tokens=None) -> AsyncIterator[ToolStreamChunk]:
+    async def chat_tools_stream(
+        self, task, messages, tools, temperature=0.7, max_tokens=None
+    ) -> AsyncIterator[ToolStreamChunk]:
         if ToolGateway.searches == 0:
             ToolGateway.searches += 1
             yield ToolStreamChunk(
                 text="",
-                tool_calls=[ToolCall(id="c1", name="search_vault", arguments={"query": "The Art of War", "top_k": 3})],
+                tool_calls=[
+                    ToolCall(
+                        id="c1",
+                        name="search_vault",
+                        arguments={"query": "The Art of War", "top_k": 3},
+                    )
+                ],
             )
             return
         yield ToolStreamChunk(text="Sun Tzu wrote The Art of War [1]. ")
@@ -40,9 +48,9 @@ def _parse_sse(text: str) -> list[tuple[str, dict]]:
         event, data = None, None
         for line in block.split("\n"):
             if line.startswith("event: "):
-                event = line[len("event: "):]
+                event = line[len("event: ") :]
             elif line.startswith("data: "):
-                data = json.loads(line[len("data: "):])
+                data = json.loads(line[len("data: ") :])
         if event is not None:
             events.append((event, data))
     return events
@@ -70,7 +78,11 @@ async def _seed(corpus: str) -> str:
 
 async def _cleanup(corpus: str) -> None:
     async with async_session_factory() as session:
-        await session.execute(delete(Chunk).where(Chunk.doc_id.in_(select(Document.id).where(Document.corpus == corpus))))
+        await session.execute(
+            delete(Chunk).where(
+                Chunk.doc_id.in_(select(Document.id).where(Document.corpus == corpus))
+            )
+        )
         await session.execute(delete(Document).where(Document.corpus == corpus))
         await session.commit()
 
@@ -81,7 +93,10 @@ async def test_agent_loop_thinks_then_answers(client, require_db):
     ToolGateway.searches = 0
     try:
         with patch("app.api.routes.ask.get_gateway", return_value=ToolGateway()):
-            resp = await client.post("/api/v1/ask", json={"question": "Compare Sun Tzu and Machiavelli", "corpus": corpus})
+            resp = await client.post(
+                "/api/v1/ask",
+                json={"question": "Compare Sun Tzu and Machiavelli", "corpus": corpus},
+            )
         assert resp.status_code == 200
         events = _parse_sse(resp.text)
         names = [e for e, _ in events]
@@ -124,11 +139,15 @@ async def test_tool_stream_failure_still_grounds_answer(client, require_db):
     await _seed(corpus)
     try:
         with patch("app.api.routes.ask.get_gateway", return_value=BrokenTools()):
-            resp = await client.post("/api/v1/ask", json={"question": "Who wrote The Art of War?", "corpus": corpus})
+            resp = await client.post(
+                "/api/v1/ask", json={"question": "Who wrote The Art of War?", "corpus": corpus}
+            )
         assert resp.status_code == 200
         events = _parse_sse(resp.text)
         answer = "".join(d["text"] for e, d in events if e == "tokens")
-        assert "Sun Tzu" in answer, f"direct fallback should still answer from retrieved context: {answer!r}"
+        assert "Sun Tzu" in answer, (
+            f"direct fallback should still answer from retrieved context: {answer!r}"
+        )
         sources = [d for e, d in events if e == "sources"]
         assert sources and sources[-1]["chunks"], "fallback must emit real retrieved sources"
         citations = dict(events)["citations"]["citations"]

@@ -205,9 +205,7 @@ async def test_pipeline_drops_invented_tag_filter(require_db):
         await session.commit()
         embeddings = await embedder.embed_texts([doc.raw_text or ""])
         await store_chunks(session, doc.id, [doc.raw_text or ""], embeddings)
-    gateway = _StructuredGateway(
-        {"tags": ["fastapi", "database", "management", "system"]}
-    )
+    gateway = _StructuredGateway({"tags": ["fastapi", "database", "management", "system"]})
     async with async_session_factory() as session:
         hits, _rewritten, meta = await retrieve_context(
             session,

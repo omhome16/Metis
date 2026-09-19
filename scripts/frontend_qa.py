@@ -26,7 +26,10 @@ def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1440, "height": 900})
-        page.on("console", lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type == "error" else None)
+        page.on(
+            "console",
+            lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type == "error" else None,
+        )
         page.on("pageerror", lambda e: errors.append(f"pageerror: {e}"))
 
         # 1. home
@@ -65,7 +68,9 @@ def main():
         page.locator(".tab", has_text="Ask").click()
         page.wait_for_timeout(800)
         # conversations panel should be present
-        assert page.locator(".ask-panel-label", has_text="Conversations").count() == 1, "conversations panel missing"
+        assert page.locator(".ask-panel-label", has_text="Conversations").count() == 1, (
+            "conversations panel missing"
+        )
         print("[ok] conversations panel present")
         ta = page.locator(".composer textarea")
         ta.fill("What is RAG and how was it evaluated?")
@@ -78,7 +83,9 @@ def main():
                 saw_thinking = True
             if page.locator(".thinking-log-item").count() > 0:
                 saw_thinking = True
-                print(f"[ok] agent thinking log visible ({page.locator('.thinking-log-item').count()} tool step(s))")
+                print(
+                    f"[ok] agent thinking log visible ({page.locator('.thinking-log-item').count()} tool step(s))"
+                )
                 break
             page.wait_for_timeout(400)
         print(f"[ok] thinking UI observed: {saw_thinking}")

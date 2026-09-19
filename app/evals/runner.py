@@ -67,19 +67,33 @@ async def run_eval(
     embedder = get_embedder()
     per_question: list[dict] = []
     for q in questions:
-        per_question.append(await answer_question(session, gateway, q.question, q.ground_truth, dataset_id, config))
+        per_question.append(
+            await answer_question(session, gateway, q.question, q.ground_truth, dataset_id, config)
+        )
 
     latencies = sorted(r["latency"] for r in per_question)
     n = len(latencies)
-    citation_scores = [metrics.citation_correctness(r["answer"], r["context_ids"])[0] for r in per_question]
+    citation_scores = [
+        metrics.citation_correctness(r["answer"], r["context_ids"])[0] for r in per_question
+    ]
 
     report_metrics = {
-        "faithfulness": await _avg_metric(lambda r: metrics.faithfulness(gateway, r["answer"], r["contexts"]), per_question),
-        "answer_relevancy": await _avg_metric(
-            lambda r: metrics.answer_relevancy(gateway, r["question"], r["answer"], embedder.embed_query), per_question
+        "faithfulness": await _avg_metric(
+            lambda r: metrics.faithfulness(gateway, r["answer"], r["contexts"]), per_question
         ),
-        "context_precision": await _avg_metric(lambda r: metrics.context_precision(gateway, r["question"], r["contexts"]), per_question),
-        "context_recall": await _avg_metric(lambda r: metrics.context_recall(gateway, r["ground_truth"], r["contexts"]), per_question),
+        "answer_relevancy": await _avg_metric(
+            lambda r: metrics.answer_relevancy(
+                gateway, r["question"], r["answer"], embedder.embed_query
+            ),
+            per_question,
+        ),
+        "context_precision": await _avg_metric(
+            lambda r: metrics.context_precision(gateway, r["question"], r["contexts"]), per_question
+        ),
+        "context_recall": await _avg_metric(
+            lambda r: metrics.context_recall(gateway, r["ground_truth"], r["contexts"]),
+            per_question,
+        ),
         "citation_correctness": _avg(citation_scores),
         "latency_p50": round(latencies[n // 2], 3) if n else 0.0,
         "latency_p95": round(latencies[min(n - 1, int(n * 0.95))], 3) if n else 0.0,
@@ -97,7 +111,8 @@ async def run_eval(
         "questions": n,
         "metrics": report_metrics,
         "per_question": [
-            {k: r[k] for k in ("question", "answer", "latency", "retrieved", "cost_usd")} for r in per_question
+            {k: r[k] for k in ("question", "answer", "latency", "retrieved", "cost_usd")}
+            for r in per_question
         ],
     }
 

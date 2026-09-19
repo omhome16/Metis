@@ -28,5 +28,10 @@ async def search(
 ) -> list[SearchResult]:
     embedder = get_embedder()
     query_vec = await embedder.embed_query(q)
-    hits = await vector_search(session, query_vec, corpus=corpus, top_k=top_k or settings.top_k_rerank)
-    return [SearchResult(chunk_id=h.chunk.id, doc=h.doc_title, text=h.chunk.text[:400], score=h.score) for h in hits]
+    hits = await vector_search(
+        session, query_vec, corpus=corpus, top_k=top_k or settings.top_k_rerank
+    )
+    return [
+        SearchResult(chunk_id=h.chunk.id, doc=h.doc_title, text=h.chunk.text[:400], score=h.score)
+        for h in hits
+    ]

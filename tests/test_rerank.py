@@ -4,7 +4,11 @@ from app.rag.retrieval import ChunkHit
 
 
 def _hit(cid: str, text: str) -> ChunkHit:
-    return ChunkHit(chunk=Chunk(id=cid, doc_id="d", text=text, chunk_index=0, tokens=5), score=0.1, doc_title="t")
+    return ChunkHit(
+        chunk=Chunk(id=cid, doc_id="d", text=text, chunk_index=0, tokens=5),
+        score=0.1,
+        doc_title="t",
+    )
 
 
 async def test_mock_reranker_orders_by_overlap():

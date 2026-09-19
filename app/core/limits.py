@@ -23,7 +23,11 @@ class RateLimiter:
         self._hits[key] = recent
         if len(self._hits) > 10_000:  # bound memory: drop expired buckets
             cutoff = now - self.window
-            self._hits = {k: [t for t in v if t > cutoff] for k, v in self._hits.items() if any(t > cutoff for t in v)}
+            self._hits = {
+                k: [t for t in v if t > cutoff]
+                for k, v in self._hits.items()
+                if any(t > cutoff for t in v)
+            }
         return True
 
     def reset(self) -> None:
@@ -41,5 +45,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         client = request.client.host if request.client else "unknown"
         if not self.limiter.allow(client):
-            return JSONResponse(status_code=429, content={"detail": "rate limit exceeded, slow down"})
+            return JSONResponse(
+                status_code=429, content={"detail": "rate limit exceeded, slow down"}
+            )
         return await call_next(request)

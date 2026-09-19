@@ -11,13 +11,16 @@ from app.db.session import async_session_factory
 @pytest.fixture
 async def clean_vaults(require_db):
     """Remove only test-created vaults/docs before and after — never touches real vaults."""
+
     async def _clean() -> None:
         from sqlalchemy import delete, or_
 
         async with async_session_factory() as s:
             test_names = ("Alpha", "Lib", "GraphVault", "AutoVault")
             await s.execute(
-                delete(Document).where(or_(Document.corpus.in_(test_names), Document.corpus.like("test-%")))
+                delete(Document).where(
+                    or_(Document.corpus.in_(test_names), Document.corpus.like("test-%"))
+                )
             )
             await s.execute(
                 delete(Vault).where(or_(Vault.name.in_(test_names), Vault.name.like("test-%")))
@@ -31,7 +34,9 @@ async def clean_vaults(require_db):
 
 async def test_vault_crud(client, clean_vaults):
     # create
-    r = await client.post("/api/v1/vaults", json={"name": "Alpha", "description": "test vault", "color": "#2E6B4E"})
+    r = await client.post(
+        "/api/v1/vaults", json={"name": "Alpha", "description": "test vault", "color": "#2E6B4E"}
+    )
     assert r.status_code == 201, r.text
     body = r.json()
     assert body["name"] == "Alpha"
@@ -80,7 +85,9 @@ async def test_document_library(client, require_db, require_graph, clean_vaults)
             )
         )
         for i, text in enumerate(["FastAPI is built on Starlette.", "It uses Pydantic models."]):
-            s.add(Chunk(id=f"chunk-{doc_id}-{i}", doc_id=doc_id, text=text, chunk_index=i, tokens=5))
+            s.add(
+                Chunk(id=f"chunk-{doc_id}-{i}", doc_id=doc_id, text=text, chunk_index=i, tokens=5)
+            )
         await s.commit()
 
     # documents list shows the doc with chunk count + indexed status
@@ -111,7 +118,11 @@ async def test_document_library(client, require_db, require_graph, clean_vaults)
     r = await client.delete(f"/api/v1/documents/{doc_id}")
     assert r.status_code == 200
     async with async_session_factory() as s:
-        remaining = (await s.execute(Chunk.__table__.select().where(Chunk.doc_id == doc_id))).scalars().all()
+        remaining = (
+            (await s.execute(Chunk.__table__.select().where(Chunk.doc_id == doc_id)))
+            .scalars()
+            .all()
+        )
         assert len(remaining) == 0
 
 

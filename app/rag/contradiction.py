@@ -21,7 +21,10 @@ async def check_contradiction(gateway: LLMGateway, text_a: str, text_b: str) -> 
             "judge",
             [
                 {"role": "system", "content": CONTRADICTION_PROMPT},
-                {"role": "user", "content": f"PASSAGE A:\n{text_a[:1500]}\n\nPASSAGE B:\n{text_b[:1500]}"},
+                {
+                    "role": "user",
+                    "content": f"PASSAGE A:\n{text_a[:1500]}\n\nPASSAGE B:\n{text_b[:1500]}",
+                },
             ],
             {},
         )

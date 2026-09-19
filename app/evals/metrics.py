@@ -10,7 +10,9 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-CLAIMS_PROMPT = "Extract the atomic factual claims from the answer. Return ONLY JSON: {\"claims\": [\"...\"]}"
+CLAIMS_PROMPT = (
+    'Extract the atomic factual claims from the answer. Return ONLY JSON: {"claims": ["..."]}'
+)
 SUPPORT_PROMPT = (
     "Decide whether the CLAIM is supported by the provided CONTEXT. "
     'Return ONLY JSON: {"supported": true|false}'
@@ -80,7 +82,9 @@ async def faithfulness(gateway, answer: str, contexts: list[str]) -> float:
     context_blob = "\n\n".join(contexts)[:6000]
     supported = 0
     for c in claims:
-        if await _judge_bool(gateway, SUPPORT_PROMPT, f"CONTEXT:\n{context_blob}\n\nCLAIM:\n{c}", "supported"):
+        if await _judge_bool(
+            gateway, SUPPORT_PROMPT, f"CONTEXT:\n{context_blob}\n\nCLAIM:\n{c}", "supported"
+        ):
             supported += 1
     return round(supported / len(claims), 4)
 
@@ -118,7 +122,9 @@ async def context_precision(gateway, question: str, contexts: list[str]) -> floa
     if not contexts:
         return 0.0
     useful = [
-        await _judge_bool(gateway, USEFULNESS_PROMPT, f"QUESTION:\n{question}\n\nCONTEXT:\n{c[:1500]}", "useful")
+        await _judge_bool(
+            gateway, USEFULNESS_PROMPT, f"QUESTION:\n{question}\n\nCONTEXT:\n{c[:1500]}", "useful"
+        )
         for c in contexts
     ]
     numerator, denominator = 0.0, 0
@@ -138,7 +144,9 @@ async def context_recall(gateway, ground_truth: str, contexts: list[str]) -> flo
     context_blob = "\n\n".join(contexts)[:6000]
     present = 0
     for c in claims:
-        if await _judge_bool(gateway, PRESENT_PROMPT, f"CONTEXT:\n{context_blob}\n\nCLAIM:\n{c}", "present"):
+        if await _judge_bool(
+            gateway, PRESENT_PROMPT, f"CONTEXT:\n{context_blob}\n\nCLAIM:\n{c}", "present"
+        ):
             present += 1
     return round(present / len(claims), 4)
 
@@ -166,7 +174,7 @@ def citation_correctness(answer: str, context_ids: list[str]) -> tuple[float, di
 def _cosine(a: list[float], b: list[float]) -> float:
     if len(a) != len(b):
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))  # lengths checked above
     na = sum(x * x for x in a) ** 0.5 or 1.0
     nb = sum(y * y for y in b) ** 0.5 or 1.0
     return dot / (na * nb)

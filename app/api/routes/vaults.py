@@ -59,7 +59,11 @@ async def _counts_by_corpus(session: AsyncSession, corpora: list[str]) -> tuple[
         return {}, {}, {}
     doc_counts = dict(
         (
-            await session.execute(select(Document.corpus, func.count(Document.id)).where(Document.corpus.in_(corpora)).group_by(Document.corpus))
+            await session.execute(
+                select(Document.corpus, func.count(Document.id))
+                .where(Document.corpus.in_(corpora))
+                .group_by(Document.corpus)
+            )
         ).all()
     )
     chunk_counts = dict(
@@ -121,9 +125,9 @@ async def _summaries(session: AsyncSession, vaults: list[Vault]) -> list[VaultSu
 async def list_vaults(session: AsyncSession = Depends(get_session)) -> list[VaultSummary]:
     vaults = (await session.execute(select(Vault).order_by(Vault.name))).scalars().all()
     # Self-heal: any corpus without a vault row gets one.
-    missing = set(
-        (await session.execute(select(Document.corpus).distinct())).scalars().all()
-    ) - {v.name for v in vaults}
+    missing = set((await session.execute(select(Document.corpus).distinct())).scalars().all()) - {
+        v.name for v in vaults
+    }
     for name in sorted(missing):
         await _ensure_vault_row(session, name)
     if missing:
@@ -133,7 +137,9 @@ async def list_vaults(session: AsyncSession = Depends(get_session)) -> list[Vaul
 
 
 @router.post("/vaults", response_model=VaultSummary, status_code=201)
-async def create_vault(payload: VaultCreate, session: AsyncSession = Depends(get_session)) -> VaultSummary:
+async def create_vault(
+    payload: VaultCreate, session: AsyncSession = Depends(get_session)
+) -> VaultSummary:
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=422, detail="vault name cannot be empty")
@@ -147,7 +153,9 @@ async def create_vault(payload: VaultCreate, session: AsyncSession = Depends(get
 
 
 @router.patch("/vaults/{name}", response_model=VaultSummary)
-async def update_vault(name: str, payload: VaultUpdate, session: AsyncSession = Depends(get_session)) -> VaultSummary:
+async def update_vault(
+    name: str, payload: VaultUpdate, session: AsyncSession = Depends(get_session)
+) -> VaultSummary:
     vault = (await session.execute(select(Vault).where(Vault.name == name))).scalar_one_or_none()
     if vault is None:
         raise HTTPException(status_code=404, detail="vault not found")
@@ -186,12 +194,20 @@ async def vault_detail(name: str, session: AsyncSession = Depends(get_session)) 
 
 
 @router.get("/vaults/{name}/documents", response_model=list[DocumentSummary])
-async def vault_documents(name: str, session: AsyncSession = Depends(get_session)) -> list[DocumentSummary]:
+async def vault_documents(
+    name: str, session: AsyncSession = Depends(get_session)
+) -> list[DocumentSummary]:
     vault = (await session.execute(select(Vault).where(Vault.name == name))).scalar_one_or_none()
     if vault is None:
         raise HTTPException(status_code=404, detail="vault not found")
     docs = (
-        (await session.execute(select(Document).where(Document.corpus == name).order_by(Document.ingested_at.desc())))
+        (
+            await session.execute(
+                select(Document)
+                .where(Document.corpus == name)
+                .order_by(Document.ingested_at.desc())
+            )
+        )
         .scalars()
         .all()
     )
@@ -201,19 +217,27 @@ async def vault_documents(name: str, session: AsyncSession = Depends(get_session
     job_ids = {d.ingest_job_id for d in docs if d.ingest_job_id}
     jobs: dict[str, IngestJob] = {}
     if job_ids:
-        for job in (await session.execute(select(IngestJob).where(IngestJob.id.in_(job_ids)))).scalars():
+        for job in (
+            await session.execute(select(IngestJob).where(IngestJob.id.in_(job_ids)))
+        ).scalars():
             jobs[job.id] = job
 
     doc_ids = [d.id for d in docs]
     chunk_counts = dict(
         (
-            await session.execute(select(Chunk.doc_id, func.count(Chunk.id)).where(Chunk.doc_id.in_(doc_ids)).group_by(Chunk.doc_id))
+            await session.execute(
+                select(Chunk.doc_id, func.count(Chunk.id))
+                .where(Chunk.doc_id.in_(doc_ids))
+                .group_by(Chunk.doc_id)
+            )
         ).all()
     )
     image_counts = dict(
         (
             await session.execute(
-                select(ImageRecord.doc_id, func.count(ImageRecord.id)).where(ImageRecord.doc_id.in_(doc_ids)).group_by(ImageRecord.doc_id)
+                select(ImageRecord.doc_id, func.count(ImageRecord.id))
+                .where(ImageRecord.doc_id.in_(doc_ids))
+                .group_by(ImageRecord.doc_id)
             )
         ).all()
     )
@@ -254,22 +278,32 @@ async def vault_documents(name: str, session: AsyncSession = Depends(get_session
 
 
 @router.get("/documents/recent", response_model=list[DocumentSummary])
-async def recent_documents(limit: int = Query(12, ge=1, le=100), session: AsyncSession = Depends(get_session)) -> list[DocumentSummary]:
+async def recent_documents(
+    limit: int = Query(12, ge=1, le=100), session: AsyncSession = Depends(get_session)
+) -> list[DocumentSummary]:
     docs = (
-        (await session.execute(select(Document).order_by(Document.ingested_at.desc()).limit(limit))).scalars().all()
+        (await session.execute(select(Document).order_by(Document.ingested_at.desc()).limit(limit)))
+        .scalars()
+        .all()
     )
     if not docs:
         return []
     doc_ids = [d.id for d in docs]
     chunk_counts = dict(
         (
-            await session.execute(select(Chunk.doc_id, func.count(Chunk.id)).where(Chunk.doc_id.in_(doc_ids)).group_by(Chunk.doc_id))
+            await session.execute(
+                select(Chunk.doc_id, func.count(Chunk.id))
+                .where(Chunk.doc_id.in_(doc_ids))
+                .group_by(Chunk.doc_id)
+            )
         ).all()
     )
     image_counts = dict(
         (
             await session.execute(
-                select(ImageRecord.doc_id, func.count(ImageRecord.id)).where(ImageRecord.doc_id.in_(doc_ids)).group_by(ImageRecord.doc_id)
+                select(ImageRecord.doc_id, func.count(ImageRecord.id))
+                .where(ImageRecord.doc_id.in_(doc_ids))
+                .group_by(ImageRecord.doc_id)
             )
         ).all()
     )
@@ -279,10 +313,14 @@ async def recent_documents(limit: int = Query(12, ge=1, le=100), session: AsyncS
             title=d.title,
             corpus=d.corpus,
             format=d.format,
-            size=Path(d.file_path).stat().st_size if d.file_path and Path(d.file_path).exists() else 0,
+            size=Path(d.file_path).stat().st_size
+            if d.file_path and Path(d.file_path).exists()
+            else 0,
             chunk_count=chunk_counts.get(d.id, 0),
             image_count=image_counts.get(d.id, 0),
-            status="indexed" if (chunk_counts.get(d.id, 0) or (d.format == "image" and image_counts.get(d.id))) else "pending",
+            status="indexed"
+            if (chunk_counts.get(d.id, 0) or (d.format == "image" and image_counts.get(d.id)))
+            else "pending",
             extraction_status=d.extraction_status,
             ingested_at=d.ingested_at,
         )
@@ -291,7 +329,9 @@ async def recent_documents(limit: int = Query(12, ge=1, le=100), session: AsyncS
 
 
 @router.get("/documents/{doc_id}", response_model=DocumentSummary)
-async def document_detail(doc_id: str, session: AsyncSession = Depends(get_session)) -> DocumentSummary:
+async def document_detail(
+    doc_id: str, session: AsyncSession = Depends(get_session)
+) -> DocumentSummary:
     d = await session.get(Document, doc_id)
     if d is None:
         raise HTTPException(status_code=404, detail="document not found")
@@ -299,13 +339,21 @@ async def document_detail(doc_id: str, session: AsyncSession = Depends(get_sessi
         await session.execute(select(func.count(Chunk.id)).where(Chunk.doc_id == doc_id))
     ).scalar_one()
     image_count = (
-        await session.execute(select(func.count(ImageRecord.id)).where(ImageRecord.doc_id == doc_id))
+        await session.execute(
+            select(func.count(ImageRecord.id)).where(ImageRecord.doc_id == doc_id)
+        )
     ).scalar_one()
     size = Path(d.file_path).stat().st_size if d.file_path and Path(d.file_path).exists() else 0
     return DocumentSummary(
-        id=d.id, title=d.title, corpus=d.corpus, format=d.format, size=size,
-        chunk_count=chunk_count or 0, image_count=image_count or 0,
-        extraction_status=d.extraction_status, ingested_at=d.ingested_at,
+        id=d.id,
+        title=d.title,
+        corpus=d.corpus,
+        format=d.format,
+        size=size,
+        chunk_count=chunk_count or 0,
+        image_count=image_count or 0,
+        extraction_status=d.extraction_status,
+        ingested_at=d.ingested_at,
     )
 
 
@@ -318,14 +366,24 @@ async def document_content(doc_id: str, session: AsyncSession = Depends(get_sess
 
 
 @router.get("/documents/{doc_id}/chunks", response_model=list[DocumentChunkOut])
-async def document_chunks(doc_id: str, session: AsyncSession = Depends(get_session)) -> list[DocumentChunkOut]:
+async def document_chunks(
+    doc_id: str, session: AsyncSession = Depends(get_session)
+) -> list[DocumentChunkOut]:
     d = await session.get(Document, doc_id)
     if d is None:
         raise HTTPException(status_code=404, detail="document not found")
     rows = (
-        (await session.execute(select(Chunk).where(Chunk.doc_id == doc_id).order_by(Chunk.chunk_index))).scalars().all()
+        (
+            await session.execute(
+                select(Chunk).where(Chunk.doc_id == doc_id).order_by(Chunk.chunk_index)
+            )
+        )
+        .scalars()
+        .all()
     )
-    return [DocumentChunkOut(id=r.id, index=r.chunk_index, text=r.text, tokens=r.tokens) for r in rows]
+    return [
+        DocumentChunkOut(id=r.id, index=r.chunk_index, text=r.text, tokens=r.tokens) for r in rows
+    ]
 
 
 @router.get("/documents/{doc_id}/file")

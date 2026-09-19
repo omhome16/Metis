@@ -108,7 +108,8 @@ class GraphStore:
                         continue
                     await session.run(
                         "MATCH (e:Entity {name: $n}) SET e.canonical = $key",
-                        n=name, key=key,
+                        n=name,
+                        key=key,
                     )
         except Exception as exc:  # noqa: BLE001
             logger.warning("canonical backfill failed: %s", exc)
@@ -117,11 +118,13 @@ class GraphStore:
         """Relabel a colliding legacy entity as an :Alias and re-point its edges."""
         await session.run(
             "MATCH (e:Entity {name: $n}) SET e:Alias, e.normalized = $key",
-            n=name, key=key,
+            n=name,
+            key=key,
         )
         await session.run(
             "MATCH (a:Alias {name: $n}), (e:Entity {canonical: $key}) MERGE (a)-[:ALIAS_OF]->(e)",
-            n=name, key=key,
+            n=name,
+            key=key,
         )
         await session.run(
             "MATCH (a:Alias {name: $n})-[:ALIAS_OF]->(e) MATCH (ch:Chunk)-[r:MENTIONS]->(a) "
@@ -158,7 +161,9 @@ class GraphStore:
         display = _clean_display(name)
         await session.run(
             _ENTITY_MERGE,
-            key=key, display=display, type=(entity_type or "Concept")[:40],
+            key=key,
+            display=display,
+            type=(entity_type or "Concept")[:40],
         )
 
     # ── writes ──────────────────────────────────────────────────────────────
@@ -166,7 +171,9 @@ class GraphStore:
         async with self._driver.session() as session:
             await session.run(
                 "MERGE (d:Document {id: $id}) ON CREATE SET d.title = $title, d.corpus = $corpus",
-                id=doc_id, title=title, corpus=corpus,
+                id=doc_id,
+                title=title,
+                corpus=corpus,
             )
 
     async def upsert_chunk(self, chunk_id: str, doc_id: str, text: str, index: int) -> None:
@@ -175,7 +182,10 @@ class GraphStore:
                 "MERGE (d:Document {id: $doc_id}) "
                 "MERGE (c:Chunk {id: $chunk_id}) ON CREATE SET c.text = $text, c.index = $index "
                 "MERGE (d)-[:CONTAINS]->(c)",
-                doc_id=doc_id, chunk_id=chunk_id, text=text[:2000], index=index,
+                doc_id=doc_id,
+                chunk_id=chunk_id,
+                text=text[:2000],
+                index=index,
             )
 
     async def add_entity(self, name: str, entity_type: str = "Concept") -> None:
@@ -192,7 +202,8 @@ class GraphStore:
                 "MATCH (c:Chunk {id: $chunk_id}) "
                 "MERGE (e:Entity {canonical: $key}) "
                 "MERGE (c)-[:MENTIONS]->(e)",
-                chunk_id=chunk_id, key=key,
+                chunk_id=chunk_id,
+                key=key,
             )
 
     async def add_doc_mention(self, doc_id: str, entity_name: str) -> None:
@@ -206,10 +217,17 @@ class GraphStore:
                 "MATCH (d:Document {id: $doc_id}) "
                 "MERGE (e:Entity {canonical: $key}) "
                 "MERGE (e)-[:MENTIONED_IN]->(d)",
-                doc_id=doc_id, key=key,
+                doc_id=doc_id,
+                key=key,
             )
 
-    async def add_relation(self, source: str, target: str, rel_type: str = "RELATED_TO", evidence_chunk: str | None = None) -> None:
+    async def add_relation(
+        self,
+        source: str,
+        target: str,
+        rel_type: str = "RELATED_TO",
+        evidence_chunk: str | None = None,
+    ) -> None:
         async with self._driver.session() as session:
             src_key = normalize_entity_name(source)
             tgt_key = normalize_entity_name(target)
@@ -223,7 +241,10 @@ class GraphStore:
                 "ON CREATE SET r.weight = 1.0, r.evidence_chunk = $evidence "
                 "ON MATCH SET r.weight = r.weight + 1.0, "
                 "  r.evidence_chunk = coalesce(r.evidence_chunk, $evidence)",
-                src=src_key, tgt=tgt_key, rel_type=rel_type, evidence=evidence_chunk,
+                src=src_key,
+                tgt=tgt_key,
+                rel_type=rel_type,
+                evidence=evidence_chunk,
             )
 
     async def upsert_document_graph(
@@ -246,17 +267,21 @@ class GraphStore:
         for ent in entities:
             name = ent["name"]
             mentioned_in_chunk = False
-            for chunk_id, text, index in chunks:
+            for chunk_id, text, _index in chunks:
                 if name.lower() in text.lower():
                     await self.add_mention(chunk_id, name)
                     mentioned_in_chunk = True
             if not mentioned_in_chunk and name:
                 # entity extracted but not verbatim in any chunk → document-level link
                 await self.add_doc_mention(doc_id, name)
-        for chunk_id, text, index in chunks:
+        for chunk_id, text, _index in chunks:
             mentioned = [e["name"] for e in entities if e["name"].lower() in text.lower()]
             if len(mentioned) > 1:
-                pairs = [(mentioned[i], mentioned[j]) for i in range(len(mentioned)) for j in range(i + 1, len(mentioned))]
+                pairs = [
+                    (mentioned[i], mentioned[j])
+                    for i in range(len(mentioned))
+                    for j in range(i + 1, len(mentioned))
+                ]
                 for source, target in pairs[:max_relations_per_chunk]:
                     await self.add_relation(source, target, "RELATED_TO", evidence_chunk=chunk_id)
 
@@ -270,7 +295,9 @@ class GraphStore:
             )
 
     # ── retrieval ───────────────────────────────────────────────────────────
-    async def neighbor_chunk_ids(self, entity_names: list[str], max_hops: int = 2, limit: int = 10) -> list[str]:
+    async def neighbor_chunk_ids(
+        self, entity_names: list[str], max_hops: int = 2, limit: int = 10
+    ) -> list[str]:
         if not entity_names:
             return []
         names = [n for n in entity_names if normalize_entity_name(n)]
@@ -309,7 +336,9 @@ class GraphStore:
         params = {"from": from_name, "to": to_name, "max_paths": max_paths}
         async with self._driver.session() as session:
             result = await session.run(query, **params)
-            return [{"path": record["path"], "relationships": record["rels"]} async for record in result]
+            return [
+                {"path": record["path"], "relationships": record["rels"]} async for record in result
+            ]
 
     async def explore(self, name: str, depth: int = 2, limit: int = 50) -> list[dict]:
         depth = max(1, min(int(depth), 4))  # Cypher forbids params in path-length bounds
@@ -322,7 +351,11 @@ class GraphStore:
         async with self._driver.session() as session:
             result = await session.run(query, name=name, depth=depth, limit=limit)
             return [
-                {"label": record["label"], "value": record["value"], "relationships": record["rels"]}
+                {
+                    "label": record["label"],
+                    "value": record["value"],
+                    "relationships": record["rels"],
+                }
                 async for record in result
             ]
 
@@ -334,8 +367,7 @@ class GraphStore:
         )
         async with self._driver.session() as session:
             counts = {
-                record["label"]: record["count"]
-                async for record in await session.run(count_query)
+                record["label"]: record["count"] async for record in await session.run(count_query)
             }
             top = [
                 {"name": record["name"], "degree": record["degree"]}
@@ -343,21 +375,27 @@ class GraphStore:
             ]
         return {"nodes": counts, "top_entities": top}
 
-    async def upsert_image(self, doc_id: str, title: str, corpus: str, caption: str, tags: list[str]) -> None:
+    async def upsert_image(
+        self, doc_id: str, title: str, corpus: str, caption: str, tags: list[str]
+    ) -> None:
         """Create/merge an Image node: BELONGS_TO its document; DEPICTS caption entities."""
         async with self._driver.session() as session:
             await session.run(
                 "MERGE (d:Document {id: $doc_id}) "
                 "MERGE (img:Image {id: $doc_id}) ON CREATE SET img.caption = $caption, img.tags = $tags "
                 "MERGE (img)-[:BELONGS_TO]->(d)",
-                doc_id=doc_id, caption=caption[:500], tags=list(tags)[:10],
+                doc_id=doc_id,
+                caption=caption[:500],
+                tags=list(tags)[:10],
             )
             for name in self._caption_entities(caption):
                 await session.run(
                     "MATCH (img:Image {id: $doc_id}) "
                     "MERGE (e:Entity {canonical: $key}) ON CREATE SET e.name = $name "
                     "MERGE (img)-[:DEPICTS]->(e)",
-                    doc_id=doc_id, name=_clean_display(name), key=normalize_entity_name(name),
+                    doc_id=doc_id,
+                    name=_clean_display(name),
+                    key=normalize_entity_name(name),
                 )
 
     @staticmethod
@@ -365,21 +403,25 @@ class GraphStore:
         import re
 
         stop = {"the", "a", "an", "this", "that", "image", "picture", "photo", "painting"}
-        words = [w for w in re.findall(r"\b[A-Z][a-zA-Z]+\b", caption or "") if w.lower() not in stop]
+        words = [
+            w for w in re.findall(r"\b[A-Z][a-zA-Z]+\b", caption or "") if w.lower() not in stop
+        ]
         return words[:8]
 
     async def add_contradiction(self, chunk_a: str, chunk_b: str) -> None:
         async with self._driver.session() as session:
             await session.run(
                 "MERGE (a:Chunk {id: $a}) MERGE (b:Chunk {id: $b}) MERGE (a)-[:CONTRADICTS]->(b)",
-                a=chunk_a, b=chunk_b,
+                a=chunk_a,
+                b=chunk_b,
             )
 
     async def has_contradiction(self, chunk_a: str, chunk_b: str) -> bool:
         async with self._driver.session() as session:
             result = await session.run(
                 "MATCH (a:Chunk {id: $a})-[r:CONTRADICTS]-(b:Chunk {id: $b}) RETURN count(r) AS n",
-                a=chunk_a, b=chunk_b,
+                a=chunk_a,
+                b=chunk_b,
             )
             record = await result.single()
             return bool(record and record["n"] > 0)
@@ -399,7 +441,6 @@ class GraphStore:
                 names.add(rec["n"])
         return len(names)
 
-
     # ── library-wide (cross-vault) ─────────────────────────────────────────
     async def library_graph(self, node_limit: int = 260, edge_limit: int = 700) -> dict:
         """Cross-vault graph: every document + entity, corpus-tagged.
@@ -416,8 +457,13 @@ class GraphStore:
             node = nodes.setdefault(
                 nid,
                 {
-                    "id": nid, "label": label, "name": name or nid, "type": ntype or label,
-                    "degree": 0, "corpus": corpus, "corpora": list(corpora or []),
+                    "id": nid,
+                    "label": label,
+                    "name": name or nid,
+                    "type": ntype or label,
+                    "degree": 0,
+                    "corpus": corpus,
+                    "corpora": list(corpora or []),
                 },
             )
             node["degree"] = max(node["degree"], degree)
@@ -435,8 +481,12 @@ class GraphStore:
             seen_edges.add(key)
             edges.append(
                 {
-                    "source": source, "target": target, "kind": kind, "label": label,
-                    "weight": round(float(weight), 3), "cross": bool(cross),
+                    "source": source,
+                    "target": target,
+                    "kind": kind,
+                    "label": label,
+                    "weight": round(float(weight), 3),
+                    "cross": bool(cross),
                 }
             )
 
@@ -482,7 +532,14 @@ class GraphStore:
                     result = await session.run(edge_query, names=names, el=edge_limit)
                     async for r in result:
                         cross = _different_vaults(nodes.get(r["source"]), nodes.get(r["target"]))
-                        add_edge(r["source"], r["target"], "RELATED", r["label"], r["weight"], cross=cross)
+                        add_edge(
+                            r["source"],
+                            r["target"],
+                            "RELATED",
+                            r["label"],
+                            r["weight"],
+                            cross=cross,
+                        )
 
                 if docs:
                     de_query = (
@@ -520,7 +577,8 @@ class GraphStore:
                     "OR e.canonical CONTAINS toLower($q) "
                     "RETURN e.name AS name, coalesce(e.type, 'Concept') AS type, COUNT { (e)--() } AS degree "
                     "ORDER BY degree DESC LIMIT $limit",
-                    q=query.strip(), limit=max(1, min(int(limit), 50)),
+                    q=query.strip(),
+                    limit=max(1, min(int(limit), 50)),
                 )
                 return [
                     {"name": r["name"], "type": r["type"], "degree": r["degree"]}
@@ -607,7 +665,15 @@ class GraphStore:
                     "ORDER BY degree DESC LIMIT 8"
                 )
                 async for r in result:
-                    cards.append({"kind": "shared", "entity": r["name"], "type": r["type"], "degree": r["degree"], "vaults": r["corpora"]})
+                    cards.append(
+                        {
+                            "kind": "shared",
+                            "entity": r["name"],
+                            "type": r["type"],
+                            "degree": r["degree"],
+                            "vaults": r["corpora"],
+                        }
+                    )
 
                 # cross-vault pairs
                 result = await session.run(
@@ -622,7 +688,16 @@ class GraphStore:
                     "ORDER BY weight DESC LIMIT 8"
                 )
                 async for r in result:
-                    cards.append({"kind": "bridge", "source": r["source"], "target": r["target"], "weight": r["weight"], "vault_a": r["sv"], "vault_b": r["tv"]})
+                    cards.append(
+                        {
+                            "kind": "bridge",
+                            "source": r["source"],
+                            "target": r["target"],
+                            "weight": r["weight"],
+                            "vault_a": r["sv"],
+                            "vault_b": r["tv"],
+                        }
+                    )
         except Exception as exc:  # noqa: BLE001
             logger.warning("library_surprises failed: %s", exc)
             return []
@@ -635,9 +710,18 @@ class GraphStore:
         edges: list[dict] = []
         seen_edges: set[tuple[str, str, str]] = set()
 
-        def add_node(nid: str, label: str, name: str | None = None, ntype: str | None = None, degree: int = 0) -> None:
+        def add_node(
+            nid: str, label: str, name: str | None = None, ntype: str | None = None, degree: int = 0
+        ) -> None:
             node = nodes.setdefault(
-                nid, {"id": nid, "label": label, "name": name or nid, "type": ntype or label, "degree": 0}
+                nid,
+                {
+                    "id": nid,
+                    "label": label,
+                    "name": name or nid,
+                    "type": ntype or label,
+                    "degree": 0,
+                },
             )
             node["degree"] = max(node["degree"], degree)
 
@@ -646,7 +730,15 @@ class GraphStore:
             if key in seen_edges:
                 return
             seen_edges.add(key)
-            edges.append({"source": source, "target": target, "kind": kind, "label": label, "weight": round(float(weight), 3)})
+            edges.append(
+                {
+                    "source": source,
+                    "target": target,
+                    "kind": kind,
+                    "label": label,
+                    "weight": round(float(weight), 3),
+                }
+            )
 
         try:
             async with self._driver.session() as session:
@@ -747,9 +839,15 @@ class GraphStore:
     @staticmethod
     async def _sweep_orphans(session) -> None:
         """Delete chunks/images whose document is gone, then entities left with no edges."""
-        await session.run("MATCH (c:Chunk) WHERE NOT EXISTS { (c)<-[:CONTAINS]-(:Document) } DETACH DELETE c")
-        await session.run("MATCH (i:Image) WHERE NOT EXISTS { (i)-[:BELONGS_TO]->(:Document) } DETACH DELETE i")
-        await session.run("MATCH (a:Alias) WHERE NOT EXISTS { (a)-[:ALIAS_OF]->(:Entity) } DELETE a")
+        await session.run(
+            "MATCH (c:Chunk) WHERE NOT EXISTS { (c)<-[:CONTAINS]-(:Document) } DETACH DELETE c"
+        )
+        await session.run(
+            "MATCH (i:Image) WHERE NOT EXISTS { (i)-[:BELONGS_TO]->(:Document) } DETACH DELETE i"
+        )
+        await session.run(
+            "MATCH (a:Alias) WHERE NOT EXISTS { (a)-[:ALIAS_OF]->(:Entity) } DELETE a"
+        )
         await session.run("MATCH (e:Entity) WHERE NOT EXISTS { (e)--() } DELETE e")
 
 

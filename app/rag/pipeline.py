@@ -29,8 +29,8 @@ from app.graph.extraction import extract_entities
 from app.graph.store import get_graph_store
 from app.rag.agent import agent_events
 from app.rag.chunking import count_tokens
-from app.rag.contradiction import check_contradiction, parse_citations
 from app.rag.context import assemble_context
+from app.rag.contradiction import check_contradiction, parse_citations
 from app.rag.embeddings import get_embedder, get_image_embedder
 from app.rag.global_search import global_answer, global_intent
 from app.rag.metadata import extract_query_metadata

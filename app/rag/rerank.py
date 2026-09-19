@@ -37,9 +37,10 @@ class Reranker:
         model = await asyncio.to_thread(self._load)
         pairs = [(query, h.chunk.text[:1500]) for h in hits]
         scores = await asyncio.to_thread(model.predict, pairs, show_progress_bar=False)
-        for h, s in zip(hits, scores):
+        # strict=False: a provider returning fewer scores must degrade, not raise.
+        for h, s in zip(hits, scores, strict=False):
             h.rerank_score = round(float(s), 4)
-        ranked = sorted(zip(hits, scores), key=lambda pair: -float(pair[1]))
+        ranked = sorted(zip(hits, scores, strict=False), key=lambda pair: -float(pair[1]))
         return [h for h, _ in ranked[:top_k]]
 
 

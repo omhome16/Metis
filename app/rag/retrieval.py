@@ -145,7 +145,10 @@ async def vector_search(
         stmt = stmt.where(Document.corpus == corpus)
     stmt = _apply_meta_filters(stmt, meta)
     rows = (await session.execute(stmt)).all()
-    return [ChunkHit(chunk=chunk, score=round(1 - distance, 4), doc_title=title) for chunk, distance, title in rows]
+    return [
+        ChunkHit(chunk=chunk, score=round(1 - distance, 4), doc_title=title)
+        for chunk, distance, title in rows
+    ]
 
 
 async def fetch_chunks_by_id(session: AsyncSession, chunk_ids: list[str]) -> list[ChunkHit]:
@@ -158,7 +161,9 @@ async def fetch_chunks_by_id(session: AsyncSession, chunk_ids: list[str]) -> lis
         .where(Chunk.id.in_(chunk_ids))
     )
     rows = (await session.execute(stmt)).all()
-    return [ChunkHit(chunk=chunk, score=0.5, doc_title=title) for chunk, title in rows]  # graph hit: neutral score
+    return [
+        ChunkHit(chunk=chunk, score=0.5, doc_title=title) for chunk, title in rows
+    ]  # graph hit: neutral score
 
 
 def merge_hits(hits: list[ChunkHit], extra: list[ChunkHit], top_k: int = 20) -> list[ChunkHit]:
@@ -321,7 +326,9 @@ async def store_image(
     tags: list[str],
     embedding: list[float],
 ) -> ImageRecord:
-    row = ImageRecord(doc_id=doc_id, file_path=file_path, caption=caption, tags=tags, embedding=embedding)
+    row = ImageRecord(
+        doc_id=doc_id, file_path=file_path, caption=caption, tags=tags, embedding=embedding
+    )
     session.add(row)
     await session.commit()
     return row
@@ -346,4 +353,7 @@ async def image_search(
     if corpus:
         stmt = stmt.where(Document.corpus == corpus)
     rows = (await session.execute(stmt)).all()
-    return [ImageHit(image=image, score=round(1 - distance, 4), doc_title=title) for image, distance, title in rows]
+    return [
+        ImageHit(image=image, score=round(1 - distance, 4), doc_title=title)
+        for image, distance, title in rows
+    ]

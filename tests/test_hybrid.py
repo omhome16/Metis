@@ -10,7 +10,11 @@ from app.rag.retrieval import fuse_hybrid, keyword_search, store_chunks, vector_
 
 async def _cleanup(corpus: str) -> None:
     async with async_session_factory() as session:
-        await session.execute(delete(Chunk).where(Chunk.doc_id.in_(select(Document.id).where(Document.corpus == corpus))))
+        await session.execute(
+            delete(Chunk).where(
+                Chunk.doc_id.in_(select(Document.id).where(Document.corpus == corpus))
+            )
+        )
         await session.execute(delete(Document).where(Document.corpus == corpus))
         await session.commit()
 
@@ -19,8 +23,12 @@ async def test_keyword_search_finds_term(require_db):
     corpus = f"test-kw-{uuid.uuid4().hex[:8]}"
     async with async_session_factory() as session:
         doc = Document(
-            id=str(uuid.uuid4()), title="PyTorch guide", corpus=corpus, format="txt",
-            content_hash=uuid.uuid4().hex, raw_text="tensors are cool",
+            id=str(uuid.uuid4()),
+            title="PyTorch guide",
+            corpus=corpus,
+            format="txt",
+            content_hash=uuid.uuid4().hex,
+            raw_text="tensors are cool",
         )
         session.add(doc)
         await session.commit()
@@ -48,8 +56,12 @@ async def test_rrf_fusion(require_db):
     embedder = get_embedder()
     async with async_session_factory() as session:
         doc = Document(
-            id=str(uuid.uuid4()), title="Both", corpus=corpus, format="txt",
-            content_hash=uuid.uuid4().hex, raw_text="alpha beta gamma",
+            id=str(uuid.uuid4()),
+            title="Both",
+            corpus=corpus,
+            format="txt",
+            content_hash=uuid.uuid4().hex,
+            raw_text="alpha beta gamma",
         )
         session.add(doc)
         await session.commit()

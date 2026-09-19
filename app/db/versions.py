@@ -26,8 +26,6 @@ async def bump_corpus_version(session: AsyncSession, corpus: str) -> int:
 async def get_corpus_version(session: AsyncSession, corpus: str) -> int:
     """Current version for a corpus; 0 when it has never been bumped."""
     version = (
-        await session.execute(
-            select(CorpusVersion.version).where(CorpusVersion.corpus == corpus)
-        )
+        await session.execute(select(CorpusVersion.version).where(CorpusVersion.corpus == corpus))
     ).scalar_one_or_none()
     return version or 0

@@ -12,7 +12,9 @@ async def _cleanup(corpus: str) -> None:
     async with async_session_factory() as session:
         await session.execute(delete(Document).where(Document.corpus == corpus))
         await session.execute(delete(IngestJob).where(IngestJob.corpus == corpus))
-        await session.execute(delete(Vault).where(Vault.name == corpus))  # ingest auto-creates vault rows
+        await session.execute(
+            delete(Vault).where(Vault.name == corpus)
+        )  # ingest auto-creates vault rows
         await session.commit()
 
 
@@ -40,7 +42,11 @@ async def test_ingest_txt_file(client, tmp_path, require_db):
 
     # document row stored with raw bytes
     async with async_session_factory() as session:
-        docs = (await session.execute(select(Document).where(Document.corpus == corpus))).scalars().all()
+        docs = (
+            (await session.execute(select(Document).where(Document.corpus == corpus)))
+            .scalars()
+            .all()
+        )
         assert len(docs) == 1
         assert docs[0].format == "txt"
         assert (tmp_path / job_id).exists()

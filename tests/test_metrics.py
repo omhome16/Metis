@@ -16,7 +16,9 @@ class StubGateway:
 
 
 async def test_faithfulness_all_supported():
-    gw = StubGateway({"Extract the atomic": {"claims": ["c1", "c2"]}, "CLAIM:\n": {"supported": True}})
+    gw = StubGateway(
+        {"Extract the atomic": {"claims": ["c1", "c2"]}, "CLAIM:\n": {"supported": True}}
+    )
     score = await metrics.faithfulness(gw, "The sky is blue. Grass is green.", ["context"])
     assert score == 1.0
 

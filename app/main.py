@@ -9,10 +9,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-# Windows' mimetypes registry lacks .woff2 — register so @font-face loads.
-mimetypes.add_type("font/woff2", ".woff2")
-mimetypes.add_type("font/woff", ".woff")
-
 from app.api.routes import (
     ask,
     cache,
@@ -25,8 +21,10 @@ from app.api.routes import (
     ingest,
     library,
     search,
-    settings as settings_routes,
     vaults,
+)
+from app.api.routes import (
+    settings as settings_routes,
 )
 from app.core.config import settings
 from app.core.errors import register_exception_handlers
@@ -34,6 +32,11 @@ from app.core.limits import RateLimiter, RateLimitMiddleware
 from app.core.logging import get_logger, setup_logging
 from app.db.session import engine
 from app.graph.store import get_graph_store
+
+# Windows' mimetypes registry lacks .woff2/.woff — register so @font-face loads.
+# Done after the imports (not between them) so the module stays import-clean.
+mimetypes.add_type("font/woff2", ".woff2")
+mimetypes.add_type("font/woff", ".woff")
 
 logger = get_logger("app")
 STATIC_DIR = Path(__file__).resolve().parent / "static"

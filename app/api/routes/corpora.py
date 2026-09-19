@@ -18,7 +18,11 @@ router = APIRouter(tags=["corpora"])
 @router.get("/corpora", response_model=list[CorpusSummary])
 async def list_corpora(session: AsyncSession = Depends(get_session)) -> list[CorpusSummary]:
     doc_counts = dict(
-        (await session.execute(select(Document.corpus, func.count(Document.id)).group_by(Document.corpus))).all()
+        (
+            await session.execute(
+                select(Document.corpus, func.count(Document.id)).group_by(Document.corpus)
+            )
+        ).all()
     )
     chunk_counts = dict(
         (

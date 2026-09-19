@@ -59,7 +59,9 @@ async def healthz() -> dict:
     if db:
         try:
             async with engine.connect() as conn:
-                rows = (await conn.execute(text("SELECT corpus, version FROM corpus_versions"))).all()
+                rows = (
+                    await conn.execute(text("SELECT corpus, version FROM corpus_versions"))
+                ).all()
             corpus_versions = {corpus: version for corpus, version in rows}
         except Exception as exc:  # pragma: no cover - infra dependent
             logger.warning("corpus_versions health read failed: %s", exc)

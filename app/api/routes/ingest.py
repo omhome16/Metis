@@ -50,7 +50,9 @@ async def ingest_files(
     session: AsyncSession = Depends(get_session),
 ) -> IngestResponse:
     # Ensure the vault exists so the frontend can always list the corpus.
-    await session.execute(pg_insert(Vault).values(name=corpus).on_conflict_do_nothing(index_elements=["name"]))
+    await session.execute(
+        pg_insert(Vault).values(name=corpus).on_conflict_do_nothing(index_elements=["name"])
+    )
 
     job_id = str(uuid.uuid4())
     job = IngestJob(id=job_id, corpus=corpus)
@@ -117,7 +119,10 @@ async def _read_limited(upload: UploadFile) -> bytes:
             break
         size += len(chunk)
         if size > MAX_FILE_BYTES:
-            raise HTTPException(status_code=413, detail=f"File too large (max {MAX_FILE_BYTES // (1024 * 1024)} MB): {upload.filename}")
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large (max {MAX_FILE_BYTES // (1024 * 1024)} MB): {upload.filename}",
+            )
         chunks.append(chunk)
     return b"".join(chunks)
 
@@ -128,5 +133,9 @@ async def job_status(job_id: str, session: AsyncSession = Depends(get_session)) 
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     return JobStatus(
-        job_id=job.id, corpus=job.corpus, status=job.status, progress=job.progress, per_file_errors=job.per_file_errors
+        job_id=job.id,
+        corpus=job.corpus,
+        status=job.status,
+        progress=job.progress,
+        per_file_errors=job.per_file_errors,
     )

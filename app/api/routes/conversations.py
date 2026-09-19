@@ -4,9 +4,9 @@ The ask flow persists every exchange here, and the frontend renders past
 conversations from these endpoints so history survives reloads and browsers.
 """
 
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.logging import get_logger
 from app.db.models import Conversation, Message
@@ -50,9 +50,17 @@ async def _get_conversation(session: AsyncSession, conv_id: str) -> Conversation
 
 
 @router.get("/vaults/{name}/conversations", response_model=list[ConversationOut])
-async def list_conversations(name: str, session: AsyncSession = Depends(get_session)) -> list[ConversationOut]:
+async def list_conversations(
+    name: str, session: AsyncSession = Depends(get_session)
+) -> list[ConversationOut]:
     convs = (
-        (await session.execute(select(Conversation).where(Conversation.vault_name == name).order_by(Conversation.updated_at.desc())))
+        (
+            await session.execute(
+                select(Conversation)
+                .where(Conversation.vault_name == name)
+                .order_by(Conversation.updated_at.desc())
+            )
+        )
         .scalars()
         .all()
     )
@@ -75,17 +83,27 @@ async def list_conversations(name: str, session: AsyncSession = Depends(get_sess
 async def create_conversation(
     name: str, payload: ConversationCreate, session: AsyncSession = Depends(get_session)
 ) -> ConversationOut:
-    conv = Conversation(vault_name=name, title=(payload.title or "New conversation").strip() or "New conversation")
+    conv = Conversation(
+        vault_name=name, title=(payload.title or "New conversation").strip() or "New conversation"
+    )
     session.add(conv)
     await session.commit()
     return _to_out(conv)
 
 
 @router.get("/conversations/{conv_id}", response_model=ConversationDetail)
-async def conversation_detail(conv_id: str, session: AsyncSession = Depends(get_session)) -> ConversationDetail:
+async def conversation_detail(
+    conv_id: str, session: AsyncSession = Depends(get_session)
+) -> ConversationDetail:
     conv = await _get_conversation(session, conv_id)
     messages = (
-        (await session.execute(select(Message).where(Message.conversation_id == conv_id).order_by(Message.created_at, Message.id)))
+        (
+            await session.execute(
+                select(Message)
+                .where(Message.conversation_id == conv_id)
+                .order_by(Message.created_at, Message.id)
+            )
+        )
         .scalars()
         .all()
     )
@@ -100,10 +118,18 @@ async def conversation_detail(conv_id: str, session: AsyncSession = Depends(get_
 
 
 @router.get("/conversations/{conv_id}/messages", response_model=list[MessageOut])
-async def conversation_messages(conv_id: str, session: AsyncSession = Depends(get_session)) -> list[MessageOut]:
+async def conversation_messages(
+    conv_id: str, session: AsyncSession = Depends(get_session)
+) -> list[MessageOut]:
     await _get_conversation(session, conv_id)
     messages = (
-        (await session.execute(select(Message).where(Message.conversation_id == conv_id).order_by(Message.created_at, Message.id)))
+        (
+            await session.execute(
+                select(Message)
+                .where(Message.conversation_id == conv_id)
+                .order_by(Message.created_at, Message.id)
+            )
+        )
         .scalars()
         .all()
     )

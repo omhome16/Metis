@@ -4,7 +4,6 @@ Uses https://generativelanguage.googleapis.com/v1beta/openai/ so one OpenAI-styl
 client covers chat, streaming, JSON mode, and vision (image_url with base64 data URIs).
 """
 
-import base64
 import json
 from collections.abc import AsyncIterator
 
@@ -54,7 +53,11 @@ class GeminiProvider(LLMClient):
         max_tokens: int = 1024,
     ) -> AsyncIterator[str]:
         stream = await self._client.chat.completions.create(
-            model=model, messages=messages, temperature=temperature, max_tokens=max_tokens, stream=True
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
         )
         async for chunk in stream:
             if chunk.choices:
@@ -73,7 +76,9 @@ class GeminiProvider(LLMClient):
         try:
             return json.loads(resp.choices[0].message.content or "{}")
         except json.JSONDecodeError:
-            logger.warning("structured response was not valid JSON: %r", resp.choices[0].message.content[:200])
+            logger.warning(
+                "structured response was not valid JSON: %r", resp.choices[0].message.content[:200]
+            )
             return {}
 
     async def chat_tools_stream(
@@ -113,7 +118,9 @@ class GeminiProvider(LLMClient):
             if calls:
                 yield ToolStreamChunk(tool_calls=calls)
 
-    async def describe_image(self, image_b64: str, prompt: str, mime_type: str = "image/png") -> str:
+    async def describe_image(
+        self, image_b64: str, prompt: str, mime_type: str = "image/png"
+    ) -> str:
         data_uri = f"data:{mime_type};base64,{image_b64}"
         messages = [
             {
@@ -124,5 +131,7 @@ class GeminiProvider(LLMClient):
                 ],
             }
         ]
-        resp = await self._client.chat.completions.create(model=self._vision_model, messages=messages, max_tokens=512)
+        resp = await self._client.chat.completions.create(
+            model=self._vision_model, messages=messages, max_tokens=512
+        )
         return resp.choices[0].message.content or ""

@@ -7,6 +7,7 @@ Create Date: 2026-08-08
 """
 
 import sqlalchemy as sa
+
 from alembic import op
 
 # revision identifiers, used by Alembic.
@@ -41,7 +42,14 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
     )
     op.create_index("ix_messages_conversation_id", "messages", ["conversation_id"])
-    op.create_foreign_key("fk_messages_conversation", "messages", "conversations", ["conversation_id"], ["id"], ondelete="CASCADE")
+    op.create_foreign_key(
+        "fk_messages_conversation",
+        "messages",
+        "conversations",
+        ["conversation_id"],
+        ["id"],
+        ondelete="CASCADE",
+    )
 
 
 def downgrade() -> None:

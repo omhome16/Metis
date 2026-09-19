@@ -5,7 +5,7 @@ Schema mirrors `docs/architecture.md` §4. Embedding columns use the variable-le
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 try:
     from pgvector.sqlalchemy import HALFVEC as HalfVectorType
@@ -20,7 +20,7 @@ from app.db.base import Base
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _uuid() -> str:

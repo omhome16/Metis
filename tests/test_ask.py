@@ -24,9 +24,9 @@ def _parse_sse(text: str) -> list[tuple[str, dict]]:
         event, data = None, None
         for line in block.split("\n"):
             if line.startswith("event: "):
-                event = line[len("event: "):]
+                event = line[len("event: ") :]
             elif line.startswith("data: "):
-                data = json.loads(line[len("data: "):])
+                data = json.loads(line[len("data: ") :])
         if event is not None:
             events.append((event, data))
     return events
@@ -54,7 +54,11 @@ async def _seed(corpus: str) -> str:
 
 async def _cleanup(corpus: str) -> None:
     async with async_session_factory() as session:
-        await session.execute(delete(Chunk).where(Chunk.doc_id.in_(select(Document.id).where(Document.corpus == corpus))))
+        await session.execute(
+            delete(Chunk).where(
+                Chunk.doc_id.in_(select(Document.id).where(Document.corpus == corpus))
+            )
+        )
         await session.execute(delete(Document).where(Document.corpus == corpus))
         await session.commit()
 
@@ -64,7 +68,9 @@ async def test_ask_streams_full_event_sequence(client, require_db):
     await _seed(corpus)
 
     with patch("app.api.routes.ask.get_gateway", return_value=FakeGateway()):
-        resp = await client.post("/api/v1/ask", json={"question": "Who wrote The Art of War?", "corpus": corpus})
+        resp = await client.post(
+            "/api/v1/ask", json={"question": "Who wrote The Art of War?", "corpus": corpus}
+        )
     assert resp.status_code == 200
     assert "text/event-stream" in resp.headers.get("content-type", "")
 
@@ -192,12 +198,15 @@ async def test_ask_with_image(client, require_db):
     embedder = get_image_embedder()
     emb = await embedder.embed_image(_PNG, "image/png")
     async with async_session_factory() as session:
-        await store_image(session, doc_id, "uploads/x/pic.png", "A red sunset over the sea.", ["sunset"], emb)
+        await store_image(
+            session, doc_id, "uploads/x/pic.png", "A red sunset over the sea.", ["sunset"], emb
+        )
 
     data_url = "data:image/png;base64," + base64.b64encode(_PNG).decode()
     with patch("app.api.routes.ask.get_gateway", return_value=FakeGateway()):
         resp = await client.post(
-            "/api/v1/ask", json={"question": "What is in this image?", "corpus": corpus, "image": data_url}
+            "/api/v1/ask",
+            json={"question": "What is in this image?", "corpus": corpus, "image": data_url},
         )
     assert resp.status_code == 200
     events = _parse_sse(resp.text)

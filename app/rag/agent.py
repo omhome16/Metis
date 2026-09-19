@@ -19,11 +19,16 @@ from app.core.logging import get_logger
 from app.gateway.base import ToolCall
 from app.gateway.gateway import LLMGateway
 from app.graph.store import get_graph_store
-from app.rag.chunking import count_tokens
 from app.rag.context import assemble_context
 from app.rag.embeddings import get_embedder
 from app.rag.rerank import get_reranker
-from app.rag.retrieval import ChunkHit, fetch_chunks_by_id, fuse_hybrid, keyword_search, vector_search
+from app.rag.retrieval import (
+    ChunkHit,
+    fetch_chunks_by_id,
+    fuse_hybrid,
+    keyword_search,
+    vector_search,
+)
 
 logger = get_logger(__name__)
 
@@ -44,7 +49,11 @@ TOOL_SCHEMAS: list[dict] = [
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "The search query"},
-                    "top_k": {"type": "integer", "description": "How many passages to return (1-6)", "default": 5},
+                    "top_k": {
+                        "type": "integer",
+                        "description": "How many passages to return (1-6)",
+                        "default": 5,
+                    },
                 },
                 "required": ["query"],
             },
@@ -61,8 +70,15 @@ TOOL_SCHEMAS: list[dict] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "entity": {"type": "string", "description": "Entity name to expand in the graph"},
-                    "top_k": {"type": "integer", "description": "Maximum passages to return (1-6)", "default": 5},
+                    "entity": {
+                        "type": "string",
+                        "description": "Entity name to expand in the graph",
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Maximum passages to return (1-6)",
+                        "default": 5,
+                    },
                 },
                 "required": ["entity"],
             },
@@ -173,8 +189,10 @@ async def _graph_lookup(
             return json.dumps({"error": "knowledge graph unavailable"}), "graph unavailable"
         ids = await store.neighbor_chunk_ids([entity], max_hops=2, limit=8)
         if not ids:
-            return json.dumps({"results": [], "note": f"no graph data for '{entity}'"}), "no graph data"
-        hits = await fetch_chunks_by_id(session, ids[:max(1, int(top_k or 5))])
+            return json.dumps(
+                {"results": [], "note": f"no graph data for '{entity}'"}
+            ), "no graph data"
+        hits = await fetch_chunks_by_id(session, ids[: max(1, int(top_k or 5))])
         memory.add(hits)
         return (
             json.dumps({"results": _blocks_for(memory, hits)}, ensure_ascii=False),
@@ -189,22 +207,25 @@ async def _wikipedia(query: str, memory: AgentMemory) -> tuple[str, str]:
     """Best-effort encyclopedia summary. Never the primary source."""
     try:
         async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as client:
-            url = "https://en.wikipedia.org/api/rest_v1/page/summary/" + query.strip().replace(" ", "_")
+            url = "https://en.wikipedia.org/api/rest_v1/page/summary/" + query.strip().replace(
+                " ", "_"
+            )
             resp = await client.get(url)
             if resp.status_code == 404:
                 titles = await _wikipedia_suggest(client, query)
                 if not titles:
                     return json.dumps({"error": "no wikipedia page found"}), "no wikipedia page"
                 resp = await client.get(
-                    "https://en.wikipedia.org/api/rest_v1/page/summary/" + titles[0].replace(" ", "_")
+                    "https://en.wikipedia.org/api/rest_v1/page/summary/"
+                    + titles[0].replace(" ", "_")
                 )
             if resp.status_code != 200:
                 return json.dumps({"error": f"http {resp.status_code}"}), "wikipedia unavailable"
             data = resp.json()
             extract = (data.get("extract") or "")[:800]
-            return json.dumps({"title": data.get("title", query), "summary": extract}, ensure_ascii=False), (
-                "wikipedia summary fetched (background only)"
-            )
+            return json.dumps(
+                {"title": data.get("title", query), "summary": extract}, ensure_ascii=False
+            ), ("wikipedia summary fetched (background only)")
     except Exception as exc:  # noqa: BLE001
         logger.debug("wikipedia lookup failed for %r: %s", query, exc)
         return json.dumps({"error": "wikipedia unavailable"}), "wikipedia unavailable"
@@ -252,7 +273,9 @@ async def _direct_fallback(
         history_msgs = [
             {"role": m["role"], "content": m["content"][:4000]}
             for m in (history or [])[-6:]
-            if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str) and m["content"].strip()
+            if m.get("role") in ("user", "assistant")
+            and isinstance(m.get("content"), str)
+            and m["content"].strip()
         ]
         messages = [assembled.messages[0], *history_msgs, assembled.messages[1]]
         parts: list[str] = []
@@ -270,9 +293,13 @@ async def _execute_tool(
     try:
         args = call.arguments or {}
         if call.name == "search_vault":
-            return await _search_vault(session, corpus, str(args.get("query", "")), int(args.get("top_k", 5)), memory)
+            return await _search_vault(
+                session, corpus, str(args.get("query", "")), int(args.get("top_k", 5)), memory
+            )
         if call.name == "graph_lookup":
-            return await _graph_lookup(session, corpus, str(args.get("entity", "")), int(args.get("top_k", 5)), memory)
+            return await _graph_lookup(
+                session, corpus, str(args.get("entity", "")), int(args.get("top_k", 5)), memory
+            )
         if call.name == "wikipedia":
             return await _wikipedia(str(args.get("query", "")), memory)
         return json.dumps({"error": f"unknown tool '{call.name}'"}), "unknown tool"
@@ -328,7 +355,10 @@ async def agent_events(
                     calls = chunk.tool_calls
         except Exception as exc:  # noqa: BLE001 — tool-calling failed; fall back to direct retrieval
             logger.warning("agent step %d failed (%s) — falling back to direct answer", step, exc)
-            final_text = await _direct_fallback(session, gateway, question, corpus, history, memory) or "".join(buf).strip()
+            final_text = (
+                await _direct_fallback(session, gateway, question, corpus, history, memory)
+                or "".join(buf).strip()
+            )
             break
 
         if usage is not None:
@@ -341,13 +371,20 @@ async def agent_events(
         # The model asked for tools → run them and feed results back.
         reasoning = "".join(buf).strip()
         tc_payload = [
-            {"id": c.id, "type": "function", "function": {"name": c.name, "arguments": json.dumps(c.arguments)}}
+            {
+                "id": c.id,
+                "type": "function",
+                "function": {"name": c.name, "arguments": json.dumps(c.arguments)},
+            }
             for c in calls
         ]
         messages.append({"role": "assistant", "content": reasoning, "tool_calls": tc_payload})
         for call in calls:
             result, summary = await _execute_tool(session, corpus, call, memory)
-            yield ("thinking", {"step": step, "tool": call.name, "args": call.arguments, "result": summary})
+            yield (
+                "thinking",
+                {"step": step, "tool": call.name, "args": call.arguments, "result": summary},
+            )
             messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
 
     if not final_text:
