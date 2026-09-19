@@ -69,6 +69,13 @@ at four points with a fifth and sixth instrumented.**
 - Verified the markdown renderer escapes before transforming (`inline()` starts with
   `esc()`), so rendering model answer text through `innerHTML` is not an XSS path.
   Recorded here because it was checked, not assumed.
+- **Dependency audit** (`pip-audit` over the exported runtime requirements). `pypdf`
+  6.15.0 carried four advisories, fixed by bumping to **6.19.0**. `transformers
+  4.57.6` carries eight advisories that are all fixed only in `transformers >= 5` —
+  a hard pin here because 5.x cannot load `bge-m3`. That is an accepted risk with a
+  stated reason and mitigations, documented in `docs/deployment.md`.
+- **Secrets scan**: `.env` is untracked, and no key-shaped strings appear in any
+  tracked file or anywhere in git history.
 
 ### Not done (honest gaps)
 

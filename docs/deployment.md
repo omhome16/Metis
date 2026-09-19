@@ -145,6 +145,31 @@ the worker cannot read what the API uploaded (see step 3).
   `arq app.workers.settings.WorkerSettings`), plus Railway Postgres + Redis plugins.
 - Neo4j: same AuraDB Free approach. Set env vars per service.
 
+## Dependency audit
+
+`uvx pip-audit` over the exported runtime requirements (the `torch`/`torchvision`
+`+cpu` pins come from the PyTorch CPU index and cannot be resolved by PyPI, so
+exclude them from any audit run):
+
+- **`pypdf`** — four advisories in `6.15.0`; fixed by bumping to `6.19.0`. Done.
+  (Not covered by tests: the PDF/OCR ingest tests are infra-gated.)
+- **`transformers 4.57.6`** — eight advisories, every one fixed only in
+  `transformers >= 5`. **This cannot be fixed here and is an accepted risk:**
+  `transformers<5` is a hard pin because 5.x drops the processor-loading path
+  `bge-m3` needs and crashes fresh processes loading it (`AGENTS.md`). Mitigating
+  context: Metis loads embedding/rerank weights from a fixed, trusted model ID,
+  never from untrusted user input, which is the surface most of these advisories
+  concern. Revisit when `transformers` 5.x can load `bge-m3`, and test it properly
+  at that point rather than assuming the pin is permanent.
+
+Re-run after dependency changes:
+
+```bash
+uv export --no-hashes --no-dev --format requirements-txt \
+  | grep -vE '^(torch|torchvision)==' > /tmp/reqs.txt
+uvx pip-audit -r /tmp/reqs.txt
+```
+
 ## Cost notes
 
 - Embeddings / reranker / CLIP run **locally (free)** in the container.

@@ -33,7 +33,7 @@ dependencies = [
     "sentence-transformers<5",
     "numpy>=2.1",
     # Ingestion
-    "pypdf>=5.1",
+    "pypdf>=6.16.1",
     # OCR (P6): pytesseract needs the tesseract binary; pymupdf rasterizes
     # PDF pages locally (pure wheel — no poppler needed)
     "pytesseract>=0.3.13",
