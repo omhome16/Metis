@@ -33,7 +33,7 @@ from app.rag.context import assemble_context
 from app.rag.contradiction import check_contradiction, parse_citations
 from app.rag.embeddings import get_embedder, get_image_embedder
 from app.rag.global_search import global_answer, global_intent
-from app.rag.metadata import extract_query_metadata
+from app.rag.metadata import scoped_query_metadata
 from app.rag.rerank import get_reranker
 from app.rag.retrieval import (
     ChunkHit,
@@ -99,8 +99,11 @@ async def retrieve_context(
     meta: dict = {}
     if metadata_filter:
         try:
-            meta = await extract_query_metadata(gateway, rewritten)
+            # Selection when a judgment backend is configured (tags can only be
+            # values the corpus holds), otherwise the original LLM extraction.
+            meta = await scoped_query_metadata(gateway, rewritten, session=session, corpus=corpus)
             if meta.get("tags"):
+                # Still validated: the generation path can name tags that do not exist.
                 tagged = await _corpus_has_tags(session, corpus, meta["tags"])
                 if not tagged:
                     logger.info(
