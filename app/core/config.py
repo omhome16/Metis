@@ -155,6 +155,15 @@ class Settings(BaseSettings):
     # Set METIS_CORS_ORIGINS (comma-separated) in prod; dev default allows all.
     cors_origins: list[str] = ["*"]
 
+    # ── Access control (see app/core/security.py) ─────────────────────────
+    # Empty = no auth (the localhost/single-user default). Set it before
+    # exposing Metis publicly: every protected route then needs the token.
+    # A shared secret, not an identity system.
+    api_token: str = ""
+    # Trust `X-Forwarded-For` for rate-limit bucketing. Only enable behind a
+    # proxy that overwrites the header, or clients can forge their own bucket.
+    trust_proxy_headers: bool = False
+
     @field_validator("groq_api_key", "gemini_api_key", "typesafe_api_key", mode="before")
     @classmethod
     def _trim_api_keys(cls, v):

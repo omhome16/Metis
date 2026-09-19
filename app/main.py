@@ -30,6 +30,7 @@ from app.core.config import settings
 from app.core.errors import register_exception_handlers
 from app.core.limits import RateLimiter, RateLimitMiddleware
 from app.core.logging import get_logger, setup_logging
+from app.core.security import ApiTokenMiddleware, SecurityHeadersMiddleware
 from app.db.session import engine
 from app.graph.store import get_graph_store
 
@@ -62,10 +63,17 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 
-# CORS is added last → outermost, so its headers are present even on 429s.
+# Middleware runs in reverse registration order: CORS (outermost) → security
+# headers → rate limit → token gate → routes. So even a 401 or 429 carries the
+# CORS and security headers, and the limiter sees abusive traffic before the
+# token comparison runs.
+app.add_middleware(ApiTokenMiddleware, token=settings.api_token)
 app.add_middleware(
-    RateLimitMiddleware, limiter=RateLimiter(settings.rate_limit_max, settings.rate_limit_window)
+    RateLimitMiddleware,
+    limiter=RateLimiter(settings.rate_limit_max, settings.rate_limit_window),
+    trust_proxy_headers=settings.trust_proxy_headers,
 )
+app.add_middleware(SecurityHeadersMiddleware, hsts=settings.env == "prod")
 # allow_credentials is only valid with explicit origins — skip it for the wildcard dev default.
 app.add_middleware(
     CORSMiddleware,

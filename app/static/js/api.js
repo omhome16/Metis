@@ -1,8 +1,34 @@
 /* Thin API client for the Metis backend. */
 
 const enc = encodeURIComponent;
+const TOKEN_KEY = "metis.apiToken";
 
-async function request(method, url, { json, form } = {}) {
+/** The API token this browser holds ("" when the instance needs none). */
+export function apiToken() {
+  try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; }
+}
+
+/** Remember (or forget) the token; private-mode storage failures stay silent. */
+export function setApiToken(token) {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch { /* storage unavailable — requests just stay anonymous */ }
+}
+
+function authHeaders(base = {}) {
+  const token = apiToken();
+  return token ? { ...base, Authorization: `Bearer ${token}` } : base;
+}
+
+/** Append the token for browser navigations that cannot set headers. */
+function withToken(url) {
+  const token = apiToken();
+  if (!token) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}token=${enc(token)}`;
+}
+
+async function request(method, url, { json, form } = {}, retried = false) {
   const opts = { method, signal: undefined };
   if (json !== undefined) {
     opts.headers = { "Content-Type": "application/json" };
@@ -10,7 +36,16 @@ async function request(method, url, { json, form } = {}) {
   } else if (form !== undefined) {
     opts.body = form; // FormData — browser sets the multipart boundary
   }
+  opts.headers = authHeaders(opts.headers || {});
   const res = await fetch(url, opts);
+  if (res.status === 401 && !retried && typeof window !== "undefined") {
+    // The instance is token-protected and this browser has none (or a stale one).
+    const entered = window.prompt("This Metis instance requires an API token:");
+    if (entered && entered.trim()) {
+      setApiToken(entered.trim());
+      return request(method, url, { json, form }, true);
+    }
+  }
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -52,7 +87,7 @@ export const api = {
   doc: (id) => request("GET", `/api/v1/documents/${id}`),
   docContent: (id) => request("GET", `/api/v1/documents/${id}/content`),
   docChunks: (id) => request("GET", `/api/v1/documents/${id}/chunks`),
-  docFileUrl: (id) => `/api/v1/documents/${id}/file`,
+  docFileUrl: (id) => withToken(`/api/v1/documents/${id}/file`),
   deleteDoc: (id) => request("DELETE", `/api/v1/documents/${id}`),
 
   conversations: (name) => request("GET", `/api/v1/vaults/${enc(name)}/conversations`),
@@ -79,7 +114,7 @@ export const api = {
 export async function askStream(payload, onEvent, signal) {
   const res = await fetch("/api/v1/ask", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload),
     signal,
   });
