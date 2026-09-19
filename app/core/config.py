@@ -82,6 +82,8 @@ class Settings(BaseSettings):
     cache_max_len_ratio: float = 1.5
     query_rewrite: bool = True
     rerank_enabled: bool = True
+    # cross-encoder (default, local+free) | typesafe (compare, don't presume)
+    rerank_backend: str = "cross-encoder"
 
     # ── Parent-child chunking (P3.1) ───────────────────────────────────────
     # true: children (~child_size) are embedded and searched; context blocks
@@ -100,6 +102,10 @@ class Settings(BaseSettings):
     # true: heuristic lane decision is optionally refined by one LLM call
     # (task "router"); any failure keeps the heuristic result. false: heuristic only.
     router_llm: bool = False
+    # heuristic (default) | llm | judgment — the last one routes by Choice.
+    # Kept opt-in: the heuristic router is synchronous, free and never raises,
+    # so a network hop per question has to earn its place on your own data.
+    router_backend: str = "heuristic"
 
     # ── Global sensemaking (P5) ─────────────────────────────────────────────
     # top-k communities whose summaries feed a deep-lane "global" answer.

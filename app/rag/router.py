@@ -18,6 +18,8 @@ from typing import Literal
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.gateway.gateway import LLMGateway
+from app.judgment.base import Choice
+from app.judgment.calibration import ask_quietly, get_judgment_client
 
 logger = get_logger(__name__)
 
@@ -148,6 +150,46 @@ async def _llm_refine(gateway: LLMGateway, question: str, heuristic: Lane) -> La
     return heuristic
 
 
+LANE_CHOICE = Choice(
+    instructions=(
+        "Which lane should serve this question? 'fast': a greeting, thanks, or trivia "
+        "that needs no source lookup. 'standard': a factual question about the "
+        "library's content. 'deep': a comparison, a relationship across sources, or a "
+        "corpus-level summary."
+    ),
+    criteria={
+        "fast": "No retrieval is needed to answer this.",
+        "standard": "It needs sources from the library, but only direct retrieval.",
+        "deep": "It needs multiple sources compared or the whole corpus considered.",
+    },
+)
+
+
+def _effective_router_backend(use_llm: bool | None) -> str:
+    """Resolve the refinement backend; `router_llm` stays honored for back-compat."""
+    if settings.router_backend != "heuristic":
+        return settings.router_backend
+    refine = settings.router_llm if use_llm is None else use_llm
+    return "llm" if refine else "heuristic"
+
+
+async def _judgment_refine(question: str, heuristic: Lane) -> Lane:
+    """Pick the lane with one Choice question. Never raises.
+
+    Opt-in via `METIS_ROUTER_BACKEND=judgment`, and worth measuring before
+    trusting: the heuristic router is synchronous, free, and cannot fail, so this
+    has to beat it on your own questions to be worth a network hop.
+    """
+    client = get_judgment_client()
+    if client is None:
+        return heuristic
+    result = await ask_quietly(client, {"question": (question or "")[:2000]}, {"lane": LANE_CHOICE})
+    if result is None:
+        return heuristic
+    lane = result.choice("lane")
+    return lane if lane in ("fast", "standard", "deep") else heuristic
+
+
 async def route_question(
     question: str,
     gateway: LLMGateway | None,
@@ -161,6 +203,9 @@ async def route_question(
     if mode in ("fast", "standard", "deep"):
         return mode
     lane = _heuristic(question)
-    if gateway is not None and (settings.router_llm if use_llm is None else use_llm):
+    backend = _effective_router_backend(use_llm)
+    if backend == "judgment":
+        return await _judgment_refine(question, lane)
+    if gateway is not None and backend == "llm":
         return await _llm_refine(gateway, question, lane)
     return lane
