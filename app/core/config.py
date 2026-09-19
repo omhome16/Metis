@@ -29,8 +29,10 @@ class Settings(BaseSettings):
 
     # ── LLM gateway ────────────────────────────────────────────────────────
     # NOTE: GROQ_API_KEY / GEMINI_API_KEY use their canonical unprefixed names.
+    # TYPESAFE_API_KEY likewise uses its canonical unprefixed name.
     groq_api_key: str = Field(default="", validation_alias="GROQ_API_KEY")
     gemini_api_key: str = Field(default="", validation_alias="GEMINI_API_KEY")
+    typesafe_api_key: str = Field(default="", validation_alias="TYPESAFE_API_KEY")
     groq_base_url: str = "https://api.groq.com/openai/v1"
     gemini_openai_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
     primary_provider: str = "groq"  # groq | gemini
@@ -129,6 +131,19 @@ class Settings(BaseSettings):
     hnsw_ef_search: int = 120
     hnsw_iterative_scan: str = "relaxed_order"  # off | relaxed_order | strict_order
 
+    # ── Judgment layer (TypeSafe System One / Jev) ───────────────────────
+    # Metis *generates* with app/gateway and *decides* with a judgment model.
+    # Jev returns typed answers + calibrated probabilities instead of text, so
+    # the tasks below threshold in code. Input $0.042/Mtok, output free.
+    # backend: llm (default, pre-existing LLM judges) | typesafe | mock | off.
+    # Docs: https://docs.typesafe.ai ; key: https://console.typesafe.ai
+    judgment_backend: str = "llm"
+    typesafe_model: str = "jev-latest"
+    # A Noul within this distance of 0.5 reads as "similar either way", not
+    # "medium intensity", so it escalates to the LLM judge instead of acting.
+    judgment_noul_uncertain_band: float = 0.15
+    judgment_contradiction_threshold: float = 0.5
+
     # ── Observability / limits ─────────────────────────────────────────────
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
@@ -140,7 +155,7 @@ class Settings(BaseSettings):
     # Set METIS_CORS_ORIGINS (comma-separated) in prod; dev default allows all.
     cors_origins: list[str] = ["*"]
 
-    @field_validator("groq_api_key", "gemini_api_key", mode="before")
+    @field_validator("groq_api_key", "gemini_api_key", "typesafe_api_key", mode="before")
     @classmethod
     def _trim_api_keys(cls, v):
         """Treat whitespace-only values (e.g. `KEY=   # comment`) as unset."""

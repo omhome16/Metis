@@ -41,6 +41,7 @@ dependencies = [
     # Observability
     "langfuse>=2.45",
     "transformers<5",
+    "typesafe-sdk>=0.5.7",
 ]
 
 [dependency-groups]
@@ -50,6 +51,7 @@ dev = [
     "respx>=0.22",
     "ruff>=0.7",
     "playwright>=1.62",
+    "httpx2>=2.13.0",
 ]
 
 # CPU-only torch from the official PyTorch index (avoids multi-GB CUDA wheels).
