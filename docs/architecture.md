@@ -34,6 +34,11 @@ flowchart LR
         GM[LLM gateway<br/>groq → gemini → ollama → mock]
     end
 
+    subgraph JEV[app/judgment]
+        CAL[calibration:<br/>thresholds + escalation]
+        JC[JudgmentClient<br/>typesafe → mock → none]
+    end
+
     subgraph Store[Persistence]
         PG[(Postgres + pgvector)]
         RD[(Redis<br/>semantic cache / arq queue)]
@@ -62,6 +67,9 @@ flowchart LR
     PIPE --> RD
     N4 --> GB
     N4 --> CON
+    PIPE --> CAL
+    CON --> CAL
+    CAL --> JC
     R --> W
     W --> PG
     W --> N4
@@ -150,6 +158,7 @@ citation_correctness == 1.0), skip-if-down, exit 1 on breach. `GET
 
 | Decision | Why |
 |---|---|
+| **Judgment layer as a sibling of the gateway** (`app/judgment/`) | Generating text and returning calibrated decisions are different contracts, so they are different interfaces: `LLMClient` streams tokens, `JudgmentClient` returns typed answers with probability distributions and never emits prose. Folding it into the gateway ABC would have corrupted what that ABC means, and every caller would have had to branch on model kind. Policy (thresholds, the escalation band) lives in `calibration.py`, not in prompt text, so it changes without re-running inference. Default backend is `llm`, so the layer is opt-in and measurable against the paths it replaces — see [jev.md](jev.md). |
 | **Gateway abstraction with mock fallback** (`app/gateway/`) | Groq/Gemini are OpenAI-compatible but tiny behavioral differences (tool-call formats, rate-limit shapes) — one interface, deterministic `MockProvider` for tests and no-key dev. Providers chain preferred → others → mock per task (`TASK_PROVIDER`, overridable per task via `METIS_JUDGE_PROVIDER`/`METIS_EXTRACTION_PROVIDER` — e.g. offload to ollama when free tiers are exhausted). |
 | **Hybrid + RRF + rerank** | Vector catches semantic match, tsvector catches exact terms (names, IDs); RRF fuses rank lists without score calibration; the reranker fixes order noise from both. Measured: see README "Measured results". |
 | **Graph boost is best-effort** | Entity extraction + traversal costs an LLM call per query; wrapped so any failure degrades to hybrid-only, never breaks ask (proven in the measured matrix). |
@@ -176,7 +185,10 @@ citation_correctness == 1.0), skip-if-down, exit 1 on breach. `GET
 - `app/graph/` — Neo4j store (`store.py`) + LLM entity extraction
   (`extraction.py`) + community detection/summaries (`communities.py`).
 - `app/gateway/` — provider clients (`groq.py`, `gemini.py`, `ollama.py`,
-  `mock.py`) + task routing.
+  `mock.py`), the shared `openai_compat.py` base, + task routing.
+- `app/judgment/` — TypeSafe Jev judgment layer: primitives and typed answers
+  (`base.py`), the adapter (`typesafe.py`), a deterministic mock, and the
+  threshold/escalation policy (`calibration.py`).
 - `app/evals/` — datasets, metrics, runner.
 - `app/workers/` — arq worker settings + ingest job.
 - `app/static/` — the SPA (no build step; edit `app/static/js/**` directly).
@@ -193,5 +205,10 @@ citation_correctness == 1.0), skip-if-down, exit 1 on breach. `GET
 - `tests/test_ocr.py` — OCR/empty extraction status (skips without tesseract).
 - `tests/test_feedback.py` — feedback endpoint + cache eviction.
 - `tests/test_ollama.py`, `test_gateway.py` — provider clients + task routing.
-- `tests/test_evals.py`, `test_metrics.py` — harness + judge metrics.
+- `tests/test_evals.py`, `test_metrics.py` — harness + LLM-judge metrics.
+- `tests/test_judgment.py` — primitives, backend selection, failure safety, and the
+  adapter's parsing over a mocked HTTP transport (real wire format, no key).
+- `tests/test_judgment_metrics.py` — batched metric judging + per-item escalation.
+- `tests/test_judgment_backends.py` — the opt-in rerank and router backends.
+- `tests/test_security.py` — API-token gate, security headers, rate-limit keying.
 - Frontend: `uv run python scripts/frontend_qa.py` (Playwright, expects server on :8011).

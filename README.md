@@ -4,11 +4,20 @@
 > knowledge graph of everything inside, answers questions with citations, surfaces
 > cross-document connections you didn't know existed, and flags contradictions between sources.
 
+**Docs:** [JEV judgment layer](docs/jev.md) · [Architecture](docs/architecture.md) ·
+[Deployment](docs/deployment.md) · [Changelog](CHANGELOG.md) · [Migration](MIGRATION.md) ·
+[Portfolio material](docs/portfolio.md)
+
+> **Deployment status:** not yet publicly deployed. The existing `render.yaml` blueprint
+> cannot boot as written — the free tier is 512 MB / 0.1 CPU while the image loads
+> `torch` plus a ~2.3 GB embedding model. `docs/deployment.md` has the measured options
+> and the exact checklist; that decision is deliberately open rather than papered over.
+
 ## Stack
 
 FastAPI (async) · Postgres + pgvector · Neo4j (GDS) · Redis · sentence-transformers (bge-m3,
 CLIP, bge-reranker) · LLM gateway (Groq + Gemini + ollama, free tiers, per-task overrides) ·
-arq worker · Langfuse.
+**TypeSafe Jev judgment layer** (typed, calibrated decisions) · arq worker · Langfuse.
 
 ## Architecture
 
@@ -22,14 +31,14 @@ flowchart LR
     R -->|fast| CHAT[Greet / chit-chat<br/>no retrieval]
     R -->|standard / deep| CACHE[(Semantic cache<br/>Postgres, cosine >= 0.92<br/>+ near-duplicate guard)]
     CACHE -->|hit| GEN2[Replay cached answer<br/>cached: true]
-    CACHE -->|miss| RW[Query rewrite +<br/>metadata extraction]
+    CACHE -->|miss|    RW[Query rewrite +<br/>filter selection<br/>Jev Choice or LLM]
     RW --> HY[Hybrid retrieval<br/>pgvector + FTS, RRF fusion]
     HY --> GB[Graph boost<br/>entity neighbor chunks]
     GB --> RR[Cross-encoder rerank<br/>bge-reranker-base]
     RR --> PA[Parent expansion<br/>small-to-big context]
     PA --> CTX[assemble_context<br/>numbered sources]
     CTX --> GEN[Generation / ReAct agent]
-    GEN --> CC[Contradiction scan<br/>embedding band 0.70-0.95<br/>top-2 fallback]
+    GEN -->    CC[Contradiction scan<br/>embedding band 0.70-0.95<br/>Jev Noul or LLM judge]
     CC --> SSE[SSE stream<br/>sources, thinking, tokens, citations, done]
     SSE --> CACHE2[(cache_store)]
 ```
@@ -99,6 +108,31 @@ for no-key dev and tests. Tasks route per provider (`generation→groq`,
 `METIS_EXTRACTION_PROVIDER`); each call walks a fallback chain and never splices
 mid-stream failures. Structured JSON-schema calls per task; per-request cost estimates.
 
+The three OpenAI-compatible providers share one `OpenAICompatProvider` base
+(`app/gateway/openai_compat.py`) — they had drifted into three copies of the same four
+calls, which is how a retry fix ends up needing to be made in three places.
+
+### Judgment layer (`app/judgment/` — [docs](docs/jev.md))
+
+The gateway **generates** text; this layer **decides**. That distinction is the whole
+reason it exists: every decision Metis made used to be a prompt whose free-text reply
+was parsed and hoped about.
+
+Jev (TypeSafe's System One model) ingests a `state` once and evaluates every question
+against it **in parallel**, returning `Choice` / `Noul` / `Score` answers with calibrated
+probabilities instead of prose. Thresholds live in code, not in prompt text.
+
+| Integrated | What it replaced |
+|---|---|
+| Query-filter extraction | LLM *writing* tags → corpus tags enumerated as options, so an invented tag is unreachable |
+| Contradiction verdict | Parsed JSON `true/false` → a probability thresholded in code, escalating when ambiguous |
+| Eval judging | One LLM call **per claim/chunk** → **one request per metric** |
+| Reranking, lane routing | Instrumented comparison backends, opt-in and **unmeasured** |
+
+It is opt-in (`METIS_JUDGMENT_BACKEND`, default `llm` = the pre-existing paths, so
+published numbers stay reproducible), every path falls back to the original, and a
+judgment outage degrades a feature rather than failing a request.
+
 ### Eval gates
 
 Golden datasets (`app/evals/datasets.py`) → harness (`app/evals/runner.py`) →
@@ -115,6 +149,7 @@ breach. See Measured results below.
 app/
   api/routes/     one router per endpoint group (/api/v1)
   gateway/        provider clients + task routing (groq/gemini/ollama/mock)
+  judgment/       TypeSafe Jev judgment layer: primitives, adapter, mock, policy
   rag/            router, retrieval, rerank, context, agent, contradiction, vision
   graph/          Neo4j store, extraction, communities (GDS)
   evals/          golden datasets, metrics, runner
@@ -145,6 +180,19 @@ uv run arq app.workers.settings.WorkerSettings
 No API keys? Everything runs on the built-in mock provider; a local ollama model can be
 substituted per task via `METIS_JUDGE_PROVIDER` / `METIS_EXTRACTION_PROVIDER` /
 `METIS_PRIMARY_PROVIDER` (see `.env.example` and `docs/deployment.md`).
+
+Optional — enable the judgment layer (`docs/jev.md`):
+
+```bash
+export TYPESAFE_API_KEY="ts-..."      # https://console.typesafe.ai (unprefixed name)
+export METIS_JUDGMENT_BACKEND=typesafe
+```
+
+Optional — protect a public instance with a shared token:
+
+```bash
+export METIS_API_TOKEN="$(python -c 'import secrets;print(secrets.token_urlsafe(32))')"
+```
 
 ## Frontend
 
@@ -201,6 +249,9 @@ uv run python scripts/frontend_qa.py
 
 ## API surface (`/api/v1`)
 
+With `METIS_API_TOKEN` set, every endpoint below requires it (`Authorization: Bearer`,
+`X-API-Token`, or `?token=`) except `/healthz`.
+
 | Endpoint | Method | Purpose |
 |---|---|---|
 | `/healthz` | GET | Liveness + readiness |
@@ -229,11 +280,33 @@ uv run python scripts/frontend_qa.py
 | `/evals/run` | POST | Run the eval harness |
 | `/evals/reports` | GET | Past eval runs + metrics |
 
+## Security
+
+There are no accounts and no sessions — Metis is a single-operator tool.
+
+- **Access control:** set `METIS_API_TOKEN` and every protected route requires it
+  (empty is the default and keeps local use unauthenticated). Constant-time comparison;
+  `/healthz` and `/static/*` stay open so monitoring and the prompt keep working.
+  The SPA prompts once and stores the token.
+- **Headers:** `nosniff`, frame-deny, referrer-policy, permissions-policy, and a CSP that
+  keeps `script-src 'self'`; HSTS when `METIS_ENV=prod`.
+- **Rate limiting:** per-client with `Retry-After`; `METIS_TRUST_PROXY_HEADERS` makes it
+  key on `X-Forwarded-For` behind a proxy that overwrites the header (off by default,
+  since the header is client-forgeable — otherwise every visitor shares one bucket).
+- **Rendering:** the markdown renderer escapes before it transforms, so model answer
+  text reaches `innerHTML` already neutralised.
+
 ## Tests
 
 ```bash
-uv run pytest
+uv run pytest                       # infra-gated tests auto-skip without docker
+uv run pytest -q tests/test_judgment.py tests/test_judgment_metrics.py \
+  tests/test_judgment_backends.py   # judgment layer, no API key needed
 ```
+
+CI (`.github/workflows/ci.yml`) runs `ruff check`, `ruff format --check`, and `pytest` with
+**no thresholds** — both lint gates are absolute. The corpus-dependent eval matrix is
+*not* in CI because it needs an ingested corpus; it stays a deliberate local gate.
 
 ## Measured results
 
@@ -278,6 +351,14 @@ Notes:
 - `parent-child` vs `flat` is the P3.1 small-to-big comparison: resolving children
   to their parents recovers citation correctness (0.500 → 1.000) at the cost of
   latency (18.5s → 9.4s context assembly + larger windows).
+
+The `hybrid only` / `rerank only` rows above fell back to the mock provider after the
+Groq daily token limit was hit mid-run: the judge made **one call per claim and per
+chunk**, so a single eval pass could exhaust a free tier. With a judgment backend
+configured those metrics batch to **one request each** (`app/evals/metrics.py`), which
+removes that failure mode — re-run the rows after switching to see it. The comparison
+backends are not yet measured against their originals; the commands are in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 Reproduce with `uv run python -m scripts.run_matrix tech` (or `Philosophy`).
 `eval_runs` are persisted and browsable at `/evals/reports`. Only the default

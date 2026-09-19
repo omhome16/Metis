@@ -16,13 +16,34 @@ All 5 services (api/worker/db/cache/graph) can also run fully containerized:
 `uploads` volume so the worker can read the files the API stores — keep that
 volume mounted if you customize the compose file.
 
-## Security note (public deploys)
+## Security (public deploys)
 
-The API has **no authentication** — every endpoint (ingest, vault delete,
-settings, `POST /graph/communities`) is open. That is intentional for
-localhost/single-user use; before exposing Metis publicly, put it behind your
-own gate (reverse-proxy auth, VPN, or an identity proxy). The per-IP rate
-limiter (`METIS_RATE_LIMIT_MAX`) is abuse protection, not access control.
+Metis has no accounts and no sessions. It now ships its own gate rather than
+leaving this to you:
+
+```bash
+export METIS_API_TOKEN="$(python -c 'import secrets;print(secrets.token_urlsafe(32))')"
+```
+
+- **Empty (default) = no auth**, which keeps local single-user use unchanged.
+- **Set = every protected route requires it**, via `Authorization: Bearer`,
+  `X-API-Token`, or `?token=`. `/healthz` and `/static/*` stay open so monitoring
+  and the SPA's token prompt still work. Comparison is constant-time on bytes.
+- The SPA prompts once and stores the token in `localStorage`; scripted clients
+  must send it themselves.
+- **`?token=` puts the token in your access logs** — it exists only because a
+  browser download cannot attach headers. If that is unacceptable, terminate auth
+  at your reverse proxy instead and leave this unset.
+
+The rate limiter (`METIS_RATE_LIMIT_MAX`) is abuse protection, not access control.
+It keys on the client address, so behind a proxy set
+`METIS_TRUST_PROXY_HEADERS=true` — but only if that proxy overwrites
+`X-Forwarded-For`, since otherwise a client can forge its own bucket. Left false,
+*every visitor shares one bucket*.
+
+Security headers (`nosniff`, frame-deny, referrer-policy, permissions-policy, and a
+CSP keeping `script-src 'self'`) are always on; HSTS is added when
+`METIS_ENV=prod`.
 
 ## Environment variables (all `METIS_*` except LLM keys)
 
@@ -41,6 +62,15 @@ limiter (`METIS_RATE_LIMIT_MAX`) is abuse protection, not access control.
 | `METIS_QUERY_REWRITE` / `METIS_METADATA_FILTER` / `METIS_RERANK_ENABLED` | `true` | Retrieval-pipeline toggles (also per-eval config overrides) |
 | `METIS_EMBED_MODEL` / `METIS_RERANK_MODEL` / `METIS_CLIP_MODEL` | bge-m3 / bge-reranker-base / clip-ViT-B-32 | Local CPU models |
 | `METIS_DB_URL` / `METIS_REDIS_URL` / `METIS_NEO4J_*` | — | Infra endpoints. A plain `postgresql://` DSN (as injected by Render) is rewritten to `postgresql+asyncpg://` automatically |
+| `METIS_API_TOKEN` | (empty) | Shared-secret gate on protected routes; empty = no auth. See [Security](#security-public-deploys) |
+| `METIS_TRUST_PROXY_HEADERS` | `false` | Key the rate limit on `X-Forwarded-For`; only behind a proxy that overwrites it |
+| `METIS_CORS_ORIGINS` | `*` | Set explicit origins in prod (a wildcard cannot be used with credentials) |
+| `METIS_JUDGMENT_BACKEND` | `llm` | `llm` \| `typesafe` \| `mock` \| `off` — see [jev.md](jev.md) |
+| `TYPESAFE_API_KEY` | (empty) | **Unprefixed** name (like `GROQ_API_KEY`). Required when the backend is `typesafe` |
+| `METIS_TYPESAFE_MODEL` | `jev-latest` | Alias or pinned ID (`jev-1.13.0`) |
+| `METIS_JUDGMENT_CONTRADICTION_THRESHOLD` / `METIS_JUDGMENT_NOUL_UNCERTAIN_BAND` | `0.5` / `0.15` | Judgment policy; the band is when a verdict escalates instead of acting |
+| `METIS_RERANK_BACKEND` | `cross-encoder` | `cross-encoder` \| `typesafe` (comparison) |
+| `METIS_ROUTER_BACKEND` | `heuristic` | `heuristic` \| `llm` \| `judgment` |
 
 ## OCR
 
@@ -51,15 +81,20 @@ limiter (`METIS_RATE_LIMIT_MAX`) is abuse protection, not access control.
 - Documents that stay empty get `extraction_status=empty` + a UI badge + an
   ingest log warning — never silent.
 
-## CI (GitHub Actions — removed)
+## CI (GitHub Actions) and the local eval gate
 
-`.github/workflows/ci.yml` was removed (`074ba77`): the corpus-dependent
-`run_matrix` gate kept failing on fresh CI databases (no chunks seeded → the
-matrix skipped, so the gate never ran). The checks it ran are now **local gates,
-run deliberately before pushing**:
+`.github/workflows/ci.yml` runs **lint, format check, and pytest**, with no
+thresholds — both lint gates are absolute (231 violations and 42 unformatted
+files were cleared to 0). The test job uses no DB service containers on purpose:
+the infra-gated tests auto-skip, which is what makes this suite CI-viable at all.
 
-- `uv sync --frozen` → `ruff check` (violation count ≤ 283) → `ruff format --check` (drift ≤ 54)
-- `uv run pytest`
+A previous workflow was removed (`074ba77`) because it *also* ran the
+corpus-dependent `run_matrix` gate, which kept failing on fresh CI databases (no
+chunks seeded → the matrix skipped, so the gate never really ran). That check
+needs an ingested corpus and so is inherently stateful — it stays a **deliberate
+local gate**:
+
+- `uv sync --frozen` → `ruff check` → `ruff format --check` → `uv run pytest`
 - `uv run python -m scripts.run_matrix tech` — thresholds: faithfulness ≥ 0.90,
   context_precision ≥ 0.80, citation_correctness == 1.0, enforced on the default
   config only. Needs Postgres reachable **and** the dataset's corpus ingested;
@@ -68,6 +103,22 @@ run deliberately before pushing**:
   `METIS_EXTRACTION_PROVIDER` to `groq` (or an ollama service) and re-run.
 
 ## Cloud: Render (free tier) + Neo4j AuraDB Free
+
+> ⚠️ **The blueprint as written cannot boot.** Render's free web service is
+> **512 MB RAM / 0.1 CPU**, while `Dockerfile` installs `torch` and the app loads
+> `bge-m3` (~2.3 GB of weights) plus `bge-reranker-base` and CLIP. Expect an
+> out-of-memory kill. Free Postgres is also reported to expire after 30 days,
+> which would take the demo data with it.
+>
+> Options, in rough cost order: (a) a small VPS with 2–4 GB running the existing
+> `docker compose` (~$4–6/mo, keeps local models and the shared `uploads` volume);
+> (b) Render with a paid 2 GB instance (~$25–32/mo with a paid database);
+> (c) make embeddings/rerank pluggable and call a hosted embedding API so 512 MB
+> fits. **Measure the app's real resident memory before choosing** — that number,
+> not this estimate, should make the decision.
+>
+> The free tier also separates `web` and `worker`, which have no shared disk, so
+the worker cannot read what the API uploaded (see step 3).
 
 1. **Postgres/Redis** — Render managed: import `render.yaml` (Blueprint) or create
    manually. The blueprint wires `METIS_DB_URL` and `METIS_REDIS_URL` automatically.

@@ -19,25 +19,32 @@ uv run python -m scripts.run_matrix tech   # (or "Philosophy") config-matrix eva
 
 Until a DB is up, pytest auto-skips Postgres/Redis/Neo4j tests (`require_db`/`require_redis`/`require_graph` fixtures). There is no typecheck step — `ruff check` is the only lint gate.
 
-## Local gates (CI workflow was removed — `074ba77`)
+## Local gates
 
-The GitHub Actions workflow is gone (the corpus-dependent `run_matrix` gate kept failing on fresh CI DBs). Run these deliberately before pushing:
+CI (`.github/workflows/ci.yml`) runs lint, format check, and pytest, with **no thresholds** — so both lint gates are absolute. Keep them at zero:
 
-- `uv sync --frozen` → `ruff check` (violation count must stay ≤ 283) → `ruff format --check` (drift ≤ 54) → `pytest` → `run_matrix tech`.
+- `ruff check` → **0** violations · `ruff format --check` → **0** drift. (`E501` is ignored deliberately: `ruff format` owns line breaking and only unbreakable Cypher/prompt strings still trip it. `extend-immutable-calls` covers FastAPI's `Depends`/`Query` so B008 stays meaningful.)
+- Not in CI because it needs an ingested corpus, so run it deliberately before pushing:
+
+```bash
+uv sync --frozen && uv run pytest && uv run python -m scripts.run_matrix tech
+```
 - `run_matrix` enforces thresholds only when Postgres is reachable AND the dataset's corpus is ingested (skip-if-down/empty — a fresh DB has no chunks, so seed the corpus before relying on the gate): faithfulness ≥ 0.90, context_precision ≥ 0.80, citation_correctness == 1.0; exits 1 on any breach or when a judge score is unavailable. Only the default config (`hybrid+rerank+graph`) is gated; the other matrix rows are comparison configs that are intentionally worse by design.
 - Keep the ruff/format baselines in sync with reality — bump them deliberately, not to mask regressions.
 
 ## Architecture
 
 - `app/api/routes/` — one router file per endpoint group; wired in `app/main.py` under `/api/v1`. Includes `POST /ask/{message_id}/feedback` (negative feedback evicts matching semantic-cache entries), `GET /evals/feedback`, `GET/PUT /settings` (runtime settings, see Env gotchas) and `GET /library/reorganizations` (reorg audit log).
-- `app/gateway/` — LLM provider abstraction (Groq, Gemini, ollama, mock). No API keys → MockProvider fallback; most tests run entirely on the mock. Task routing is per-task (`generation→groq`, `extraction/judge→gemini`) with per-task overrides `METIS_JUDGE_PROVIDER` / `METIS_EXTRACTION_PROVIDER`.
+- `app/gateway/` — LLM provider abstraction (Groq, Gemini, ollama, mock). No API keys → MockProvider fallback; most tests run entirely on the mock. Task routing is per-task (`generation→groq`, `extraction/judge→gemini`) with per-task overrides `METIS_JUDGE_PROVIDER` / `METIS_EXTRACTION_PROVIDER`. The three OpenAI-compatible providers share `openai_compat.py` — add call-shape changes there, not per provider.
+- `app/judgment/` — TypeSafe Jev judgment layer (typed, calibrated decisions), a sibling of the gateway because generation and judgment are different contracts. `METIS_JUDGMENT_BACKEND` defaults to `llm` (the pre-existing paths), so it is opt-in and measurable; `ask_quietly` converts any failure to `None` so callers fall back. Integrated in `rag/metadata.py` (filter *selection* from enumerated corpus values), `rag/contradiction.py` (Noul verdict + escalation), `evals/metrics.py` (one batched request per metric), plus opt-in backends in `rag/rerank.py` and `rag/router.py`. See `docs/jev.md` — do not add a Jev call where the docs say text generation is needed, and Jev is text-only (never for `rag/vision.py`).
 - `app/rag/` — chunking (parent-child: parents ~2k chars, children cut from parents) → embeddings → hybrid retrieval → rerank → context → `agent.py` (ReAct loop). `app/graph/` is the Neo4j store/extraction + community detection (`communities.py`); `app/evals/` has golden datasets + metrics; `app/workers/` has the arq jobs — `ingest.py` (document pipeline) and `reorg.py` (auto-reorg: community detection + delta-only summary refresh, debounced per runtime policy; `should_run` accepts a `now` kwarg for tests).
 - Extraction is tiered (`app/graph/extraction.py`): `t1` local regex (default), `t2` t1 + LLM on sampled 8000-char windows, `t3` LLM per parent (60 max) — all fall back to t1 without API keys; mode + window count are runtime settings. Cache lookups (`app/cache.py`) take a `question=` kwarg — the near-duplicate guard (token Jaccard ≥ `cache_min_jaccard`, length ratio ≤ `cache_max_len_ratio`, capitalized-token agreement) runs only when it's provided.
 - Migrations: alembic (async, `alembic/env.py` reads `settings.db_url`). Add a numbered migration for any schema change; models register via `import app.db.models` in env.py.
 
 ## Env gotchas
 
-- LLM API keys use their **canonical unprefixed names** (`GROQ_API_KEY`, `GEMINI_API_KEY`); every other setting is `METIS_` prefixed (`app/core/config.py`). Setting `METIS_GROQ_API_KEY` silently does nothing.
+- LLM API keys use their **canonical unprefixed names** (`GROQ_API_KEY`, `GEMINI_API_KEY`, `TYPESAFE_API_KEY`); every other setting is `METIS_` prefixed (`app/core/config.py`). Setting `METIS_GROQ_API_KEY` silently does nothing.
+- `METIS_API_TOKEN` empty means **no auth** (the local default). Set it before exposing the app; `docs/deployment.md` covers the proxy-header and `?token=` trade-offs. `/healthz` and `/static/*` are always open.
 - `.env`, `demo/`, `uploads/`, `learning doc/`, model caches are gitignored runtime data — don't commit them.
 - Embeddings/rerank/CLIP run locally on CPU; `pyproject.toml` pins torch/torchvision to the cpu PyTorch index. Don't drop those overrides unless CUDA is intended.
 - `transformers`/`sentence-transformers` are pinned `<5` (`4.57.6`/`4.1.0`): 5.x crashes fresh processes (0xC0000005) loading bge-m3. Don't "upgrade" them.
@@ -51,3 +58,5 @@ The GitHub Actions workflow is gone (the corpus-dependent `run_matrix` gate kept
 - `tests/conftest.py` forces `METIS_EMBED_MODEL=mock` etc. before importing the app — tests never download model weights; don't "fix" that.
 - Tests use `httpx.AsyncClient` + `ASGITransport` against a single event loop (SQLAlchemy pool constraints); an autouse fixture disposes the engine after each test — don't add real network calls or new event loops in tests.
 - `scripts/frontend_qa.py` fails non-zero on any browser console error — run it after touching frontend JS.
+- Judgment layer: `uv run pytest -q tests/test_judgment.py tests/test_judgment_metrics.py tests/test_judgment_backends.py` — no API key needed. `tests/test_judgment.py` drives the real `typesafe-sdk` over a mocked HTTP transport, so wire-format and auth changes are caught in CI; keep that property when editing the adapter.
+- `tests/test_security.py` covers the token gate, headers, and rate-limit keying on a purpose-built app (the real app reads its token from the environment).
