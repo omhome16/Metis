@@ -1,0 +1,53 @@
+name: CI
+
+# The previous workflow was removed (074ba77) because its corpus-dependent
+# `run_matrix` eval gate kept failing on fresh CI databases: the dataset's corpus
+# is not ingested there, so the matrix skipped and the gate never really ran.
+# That gate is inherently stateful, so it stays a deliberate LOCAL gate
+# (`uv run python -m scripts.run_matrix tech`); CI guarantees the two things that
+# are actually reproducible on a clean machine — it lints and it tests.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      # No model weights or DB needed to lint, so skip the dev group's heavy ML
+      # extras and install just ruff.
+      - run: uv sync --frozen --no-dev
+      - run: uv run --no-project ruff check .
+      - run: uv run --no-project ruff format --check .
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    env:
+      # tests/conftest.py forces mock embeddings/LLMs before importing the app,
+      # so nothing here downloads weights or calls a provider.
+      METIS_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen
+      # No Postgres/Redis/Neo4j service containers: the suite auto-skips the
+      # infra-gated tests (require_db / require_redis / require_graph) instead of
+      # failing, which is how the project is designed to run on a clean machine.
+      - run: uv run pytest -q

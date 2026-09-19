@@ -78,6 +78,11 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+# E501 is redundant next to a formatter: `ruff format --check` is a hard CI gate
+# and owns line breaking. What E501 still caught was 30 unbreakable tokens —
+# Cypher statements, one-line prompt strings, URLs — which would only get worse
+# by hand-wrapping (whitespace-sensitive query strings) for no readability gain.
+ignore = ["E501"]
 
 # FastAPI's `Depends(...)`/`Query(...)` used as a parameter default is B008's intended
 # pattern; declaring them immutable keeps the rule meaningful for everything else.
