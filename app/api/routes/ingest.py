@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.models import Document, IngestJob, Vault
 from app.db.session import get_session
@@ -19,11 +20,13 @@ from app.workers.enqueue import enqueue_ingest_job
 logger = get_logger(__name__)
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
-UPLOAD_DIR = Path("uploads")
+# Absolute-path friendly (H5): cwd-relative paths break multi-process hosts.
+UPLOAD_DIR = Path(settings.upload_dir)
 
 # Extension → document format
 _ALLOWED: dict[str, str] = {
     ".pdf": "pdf",
+    ".epub": "epub",
     ".md": "md",
     ".markdown": "md",
     ".txt": "txt",

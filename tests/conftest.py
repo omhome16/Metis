@@ -12,6 +12,7 @@ os.environ["METIS_ENV"] = "test"
 os.environ["METIS_EMBED_MODEL"] = "mock"
 os.environ["METIS_RERANK_MODEL"] = "mock"
 os.environ["METIS_CLIP_MODEL"] = "mock"
+os.environ["METIS_AUTH_MODE"] = "none"  # route tests exercise business logic, not login
 
 import asyncio  # noqa: E402
 

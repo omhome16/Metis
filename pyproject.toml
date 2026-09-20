@@ -42,6 +42,10 @@ dependencies = [
     "langfuse>=2.45",
     "transformers<5",
     "typesafe-sdk>=0.5.7",
+    "pyjwt>=2.13.0",
+    "ebooklib>=0.18",
+    "beautifulsoup4>=4.12",
+    "email-validator>=2.3.0",
 ]
 
 [dependency-groups]

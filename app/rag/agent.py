@@ -1,6 +1,6 @@
 """ReAct agent: a tool-calling reasoning loop for /ask (M9).
 
-The model gets three tools — `search_vault`, `graph_lookup`, `wikipedia` — and
+The model gets two tools — `search_vault`, `graph_lookup` — and
 iterates: reason → (call tools | answer). Every tool round emits a `thinking`
 event so the frontend can show the agent at work, and every chunk it touches is
 remembered so the final answer ships with real, numbered citations.
@@ -12,7 +12,6 @@ the direct retrieval→generation path — this module is never a hard dependenc
 import json
 from collections.abc import AsyncIterator
 
-import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
@@ -84,21 +83,6 @@ TOOL_SCHEMAS: list[dict] = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "wikipedia",
-            "description": (
-                "Short encyclopedia summary for general background knowledge. "
-                "Never the primary source — always prefer evidence from the vault."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {"query": {"type": "string", "description": "Topic to look up"}},
-                "required": ["query"],
-            },
-        },
-    },
 ]
 
 SYSTEM_PROMPT = (
@@ -108,7 +92,7 @@ SYSTEM_PROMPT = (
     "Rules:\n"
     "- Always search the vault before answering questions about the vault's documents. "
     "When the user asks for a definition or explanation, give one.\n"
-    "- Prefer vault evidence. Wikipedia is background only — never answer solely from it.\n"
+    "- Answer only from vault evidence. If the vault does not contain the answer, say so.\n"
     "- Tool results show a source number for each passage. In your final answer, cite "
     "inline as [n] matching those numbers.\n"
     "- If you cannot find evidence, say so plainly instead of guessing.\n"
@@ -203,47 +187,6 @@ async def _graph_lookup(
         return json.dumps({"error": str(exc)}), "graph lookup failed"
 
 
-async def _wikipedia(query: str, memory: AgentMemory) -> tuple[str, str]:
-    """Best-effort encyclopedia summary. Never the primary source."""
-    try:
-        async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as client:
-            url = "https://en.wikipedia.org/api/rest_v1/page/summary/" + query.strip().replace(
-                " ", "_"
-            )
-            resp = await client.get(url)
-            if resp.status_code == 404:
-                titles = await _wikipedia_suggest(client, query)
-                if not titles:
-                    return json.dumps({"error": "no wikipedia page found"}), "no wikipedia page"
-                resp = await client.get(
-                    "https://en.wikipedia.org/api/rest_v1/page/summary/"
-                    + titles[0].replace(" ", "_")
-                )
-            if resp.status_code != 200:
-                return json.dumps({"error": f"http {resp.status_code}"}), "wikipedia unavailable"
-            data = resp.json()
-            extract = (data.get("extract") or "")[:800]
-            return json.dumps(
-                {"title": data.get("title", query), "summary": extract}, ensure_ascii=False
-            ), ("wikipedia summary fetched (background only)")
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("wikipedia lookup failed for %r: %s", query, exc)
-        return json.dumps({"error": "wikipedia unavailable"}), "wikipedia unavailable"
-
-
-async def _wikipedia_suggest(client: httpx.AsyncClient, query: str) -> list[str]:
-    try:
-        resp = await client.get(
-            "https://en.wikipedia.org/w/api.php",
-            params={"action": "opensearch", "search": query, "limit": 1, "format": "json"},
-        )
-        if resp.status_code == 200:
-            return resp.json()[1] or []
-    except Exception:  # noqa: BLE001
-        pass
-    return []
-
-
 async def _direct_fallback(
     session: AsyncSession,
     gateway: LLMGateway,
@@ -300,8 +243,6 @@ async def _execute_tool(
             return await _graph_lookup(
                 session, corpus, str(args.get("entity", "")), int(args.get("top_k", 5)), memory
             )
-        if call.name == "wikipedia":
-            return await _wikipedia(str(args.get("query", "")), memory)
         return json.dumps({"error": f"unknown tool '{call.name}'"}), "unknown tool"
     except Exception as exc:  # noqa: BLE001
         return json.dumps({"error": str(exc)}), "tool error"

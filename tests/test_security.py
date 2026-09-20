@@ -19,9 +19,9 @@ from app.core.security import (
 TOKEN = "s3cret-token"
 
 
-def _client(token: str = "", hsts: bool = False) -> TestClient:
+def _client(token: str = "", hsts: bool = False, auth_mode: str = "token") -> TestClient:
     app = FastAPI()
-    app.add_middleware(ApiTokenMiddleware, token=token)
+    app.add_middleware(ApiTokenMiddleware, token=token, auth_mode=auth_mode)
     app.add_middleware(SecurityHeadersMiddleware, hsts=hsts)
 
     @app.get("/healthz")
@@ -50,6 +50,14 @@ def test_without_a_token_everything_stays_open():
     client = _client()
     assert client.get("/api/v1/thing").status_code == 200
     assert client.get("/healthz").status_code == 200
+
+
+def test_token_gate_is_dormant_outside_token_mode():
+    """users/none modes never engage the shared-secret middleware."""
+    client = _client(TOKEN, auth_mode="users")
+    assert client.get("/api/v1/thing").status_code == 200
+    client = _client(TOKEN, auth_mode="none")
+    assert client.get("/api/v1/thing").status_code == 200
 
 
 # ── token configured → protected routes require it ─────────────────────────

@@ -1,20 +1,17 @@
-"""Deployment-facing request guards: an optional API token, and security headers.
+"""Deployment-facing request guards: auth-mode gating and security headers.
 
-Metis has no accounts and no sessions — it is a single-operator tool. That is
-fine on localhost and unacceptable on a public URL, where any visitor could
-delete the library or spend the LLM quota. `METIS_API_TOKEN` closes that door
-without inventing a user system:
+Auth is configurable via `METIS_AUTH_MODE`:
 
-* **empty (default)** → no auth at all, exactly the previous behavior;
-* **set** → every protected request must present the token.
+* **users** (default) — real accounts (app/core/auth.py): per-user JWTs, owned
+  vaults. This middleware steps aside and does nothing.
+* **token** — the original shared-secret gate. `METIS_API_TOKEN` set → every
+  protected request must present it (`Authorization: Bearer`, `X-API-Token`, or
+  `?token=` — the query form exists for `<a href>` downloads). A shared secret
+  answers "may this client use the library", never "who is this".
+* **none** — localhost dev, no gate.
 
-The token is accepted as `Authorization: Bearer <token>`, `X-API-Token`, or a
-`?token=` query parameter. The query form exists only because a browser download
-(`<a href>` to `/documents/{id}/file`) cannot attach headers.
-
-This is a shared-secret gate, not an identity system: it answers "may this client
-use the library", never "who is this". `/healthz` and the static shell stay open
-so an uptime monitor and the token prompt itself can still reach them.
+`/healthz`, `/auth/*`, and the static shell stay open in token mode so the
+uptime monitor, the login screen, and the token prompt itself still work.
 """
 
 import secrets
@@ -46,6 +43,9 @@ SECURITY_HEADERS = {
 HSTS_VALUE = "max-age=31536000; includeSubDomains"
 
 
+OPEN_PREFIXES = ("/auth",)
+
+
 def presented_token(request: Request) -> str:
     """The token a request carries, from any accepted location ('' if none)."""
     authorization = request.headers.get("authorization", "")
@@ -58,14 +58,15 @@ def presented_token(request: Request) -> str:
 
 
 class ApiTokenMiddleware(BaseHTTPMiddleware):
-    """Require `METIS_API_TOKEN` on protected routes when it is configured."""
+    """Require `METIS_API_TOKEN` on protected routes (auth_mode='token' only)."""
 
-    def __init__(self, app, token: str):
+    def __init__(self, app, token: str, auth_mode: str = "users"):
         super().__init__(app)
         self.token = token or ""
+        self.active = auth_mode == "token" and bool(self.token)
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        if not self.token or self._is_open(request.url.path):
+        if not self.active or self._is_open(request.url.path):
             return await call_next(request)
         # compare_digest on bytes: constant-time, and immune to non-ASCII input
         # raising where a plain == would not.
@@ -79,7 +80,7 @@ class ApiTokenMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _is_open(path: str) -> bool:
-        return path in OPEN_PATHS or path.startswith("/static/")
+        return path in OPEN_PATHS or path.startswith(OPEN_PREFIXES) or path.startswith("/static/")
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):

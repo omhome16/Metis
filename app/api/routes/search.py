@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import CurrentUser, vault_scope_guard
 from app.core.config import settings
 from app.db.session import get_session
 from app.rag.embeddings import get_embedder
@@ -25,7 +26,15 @@ async def search(
     top_k: int = Query(5, ge=1, le=50),
     corpus: str | None = None,
     session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
 ) -> list[SearchResult]:
+    if user is not None and corpus:
+        await vault_scope_guard(session, user, corpus)
+    elif user is not None and not corpus:
+        # Unscoped search would span other accounts' vaults — refuse rather than leak.
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=422, detail="corpus parameter is required")
     embedder = get_embedder()
     query_vec = await embedder.embed_query(q)
     hits = await vector_search(

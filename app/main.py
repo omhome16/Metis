@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import (
     ask,
+    auth,
     cache,
     conversations,
     corpora,
@@ -18,8 +19,11 @@ from app.api.routes import (
     evals,
     graph,
     health,
+    imports,
     ingest,
     library,
+    notes,
+    reports,
     search,
     vaults,
 )
@@ -67,7 +71,11 @@ app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 # headers → rate limit → token gate → routes. So even a 401 or 429 carries the
 # CORS and security headers, and the limiter sees abusive traffic before the
 # token comparison runs.
-app.add_middleware(ApiTokenMiddleware, token=settings.api_token)
+app.add_middleware(
+    ApiTokenMiddleware,
+    token=settings.api_token,
+    auth_mode=settings.auth_mode,
+)
 app.add_middleware(
     RateLimitMiddleware,
     limiter=RateLimiter(settings.rate_limit_max, settings.rate_limit_window),
@@ -85,6 +93,7 @@ app.add_middleware(
 register_exception_handlers(app)
 
 app.include_router(health.router)
+app.include_router(auth.router, prefix=settings.api_prefix)
 app.include_router(ingest.router, prefix=settings.api_prefix)
 app.include_router(corpora.router, prefix=settings.api_prefix)
 app.include_router(ask.router, prefix=settings.api_prefix)
@@ -96,6 +105,9 @@ app.include_router(vaults.router, prefix=settings.api_prefix)
 app.include_router(conversations.router, prefix=settings.api_prefix)
 app.include_router(library.router, prefix=settings.api_prefix)
 app.include_router(documents.router, prefix=settings.api_prefix)
+app.include_router(imports.router, prefix=settings.api_prefix)
+app.include_router(notes.router, prefix=settings.api_prefix)
+app.include_router(reports.router, prefix=settings.api_prefix)
 app.include_router(settings_routes.router, prefix=settings.api_prefix)
 
 # Static frontend (SPA) — API routes above always win; unknown API paths 404.

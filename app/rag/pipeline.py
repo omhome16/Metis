@@ -7,7 +7,7 @@ M5 wiring: query rewriting, hybrid retrieval (vector + tsvector + RRF), graph
 boost, local reranking, citation grounding, and the contradiction scan.
 
 M9 wiring: when the gateway can call tools, a ReAct agent (app.rag.agent) drives
-retrieval with `search_vault` / `graph_lookup` / `wikipedia` and streams
+retrieval with `search_vault` / `graph_lookup` and streams
 `thinking` events; conversation history from the previous turns is fed back in.
 Providers without tool support (and image queries) keep the direct path.
 """
@@ -73,12 +73,14 @@ async def retrieve_context(
     question: str,
     corpus: str | None,
     config: dict | None = None,
+    doc_ids: list[str] | None = None,
 ) -> tuple[list[ChunkHit], str, dict]:
     """Query rewrite → hybrid (vector+keyword, RRF) → graph boost → rerank → parents.
 
     `config` (used by the eval harness) can override rerank_enabled / graph_boost /
-    top_k_rerank / parent_child / metadata_filter. Returns (hits, rewritten, meta)
-    where `meta` is the active metadata filter ({} when none).
+    top_k_rerank / parent_child / metadata_filter. `doc_ids` narrows both retrieval
+    arms to a document selection ("chat with these docs only"). Returns (hits,
+    rewritten, meta) where `meta` is the active metadata filter ({} when none).
     """
     cfg = config or {}
     rerank_enabled = cfg.get("rerank_enabled", settings.rerank_enabled)
@@ -118,10 +120,20 @@ async def retrieve_context(
     embedder = get_embedder()
     query_vec = await embedder.embed_query(rewritten)
     vector_hits = await vector_search(
-        session, query_vec, corpus=corpus, top_k=settings.rerank_candidates, meta=meta
+        session,
+        query_vec,
+        corpus=corpus,
+        top_k=settings.rerank_candidates,
+        meta=meta,
+        doc_ids=doc_ids,
     )
     keyword_hits = await keyword_search(
-        session, rewritten, corpus=corpus, top_k=settings.rerank_candidates, meta=meta
+        session,
+        rewritten,
+        corpus=corpus,
+        top_k=settings.rerank_candidates,
+        meta=meta,
+        doc_ids=doc_ids,
     )
     hits = fuse_hybrid(vector_hits, keyword_hits, top_k=settings.rerank_candidates)
 
@@ -283,6 +295,7 @@ async def ask_events(
     image: str | None = None,
     history: list[dict] | None = None,
     lane: Lane = "standard",
+    doc_ids: list[str] | None = None,
 ) -> AsyncIterator[tuple[str, dict]]:
     answer_id = str(uuid.uuid4())
     use_agent = lane == "deep" and getattr(gateway, "supports_tools", False) and not image
@@ -392,7 +405,12 @@ async def ask_events(
         yield ("meta", {"lane": "deep"})
     else:
         hits, _rewritten, meta = await retrieve_context(
-            session, gateway, question, corpus, config={"graph_boost": lane == "deep"}
+            session,
+            gateway,
+            question,
+            corpus,
+            config={"graph_boost": lane == "deep"},
+            doc_ids=doc_ids,
         )
         yield ("sources", _sources_payload(hits))
         if meta:

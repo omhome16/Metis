@@ -67,6 +67,7 @@ async def _contradiction_by_judgment(text_a: str, text_b: str) -> dict | None:
     return {
         "contradicts": noul >= settings.judgment_contradiction_threshold,
         "reason": f"Noul p(contradiction)={noul:.2f}",
+        "probability": round(noul, 3),
     }
 
 

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import CurrentUser, vault_scope_guard
 from app.core.logging import get_logger
 from app.db.models import Conversation, Message
 from app.db.session import get_session
@@ -42,17 +43,24 @@ async def _message_out(m: Message) -> MessageOut:
     )
 
 
-async def _get_conversation(session: AsyncSession, conv_id: str) -> Conversation:
+async def _get_conversation(
+    session: AsyncSession, conv_id: str, user: CurrentUser = None
+) -> Conversation:
     conv = await session.get(Conversation, conv_id)
     if conv is None:
         raise HTTPException(status_code=404, detail="conversation not found")
+    if user is not None:
+        await vault_scope_guard(session, user, conv.vault_name)
     return conv
 
 
 @router.get("/vaults/{name}/conversations", response_model=list[ConversationOut])
 async def list_conversations(
-    name: str, session: AsyncSession = Depends(get_session)
+    name: str,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
 ) -> list[ConversationOut]:
+    await vault_scope_guard(session, user, name)
     convs = (
         (
             await session.execute(
@@ -81,8 +89,12 @@ async def list_conversations(
 
 @router.post("/vaults/{name}/conversations", response_model=ConversationOut, status_code=201)
 async def create_conversation(
-    name: str, payload: ConversationCreate, session: AsyncSession = Depends(get_session)
+    name: str,
+    payload: ConversationCreate,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
 ) -> ConversationOut:
+    await vault_scope_guard(session, user, name)
     conv = Conversation(
         vault_name=name, title=(payload.title or "New conversation").strip() or "New conversation"
     )
@@ -93,9 +105,11 @@ async def create_conversation(
 
 @router.get("/conversations/{conv_id}", response_model=ConversationDetail)
 async def conversation_detail(
-    conv_id: str, session: AsyncSession = Depends(get_session)
+    conv_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
 ) -> ConversationDetail:
-    conv = await _get_conversation(session, conv_id)
+    conv = await _get_conversation(session, conv_id, user)
     messages = (
         (
             await session.execute(
@@ -119,9 +133,11 @@ async def conversation_detail(
 
 @router.get("/conversations/{conv_id}/messages", response_model=list[MessageOut])
 async def conversation_messages(
-    conv_id: str, session: AsyncSession = Depends(get_session)
+    conv_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
 ) -> list[MessageOut]:
-    await _get_conversation(session, conv_id)
+    await _get_conversation(session, conv_id, user)
     messages = (
         (
             await session.execute(
@@ -138,9 +154,12 @@ async def conversation_messages(
 
 @router.patch("/conversations/{conv_id}", response_model=ConversationOut)
 async def rename_conversation(
-    conv_id: str, payload: ConversationCreate, session: AsyncSession = Depends(get_session)
+    conv_id: str,
+    payload: ConversationCreate,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
 ) -> ConversationOut:
-    conv = await _get_conversation(session, conv_id)
+    conv = await _get_conversation(session, conv_id, user)
     if payload.title:
         conv.title = payload.title.strip() or conv.title  # updated_at bumps via onupdate
         await session.commit()
@@ -148,8 +167,12 @@ async def rename_conversation(
 
 
 @router.delete("/conversations/{conv_id}")
-async def delete_conversation(conv_id: str, session: AsyncSession = Depends(get_session)) -> dict:
-    conv = await _get_conversation(session, conv_id)
+async def delete_conversation(
+    conv_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
+) -> dict:
+    conv = await _get_conversation(session, conv_id, user)
     await session.execute(delete(Message).where(Message.conversation_id == conv_id))
     await session.delete(conv)
     await session.commit()

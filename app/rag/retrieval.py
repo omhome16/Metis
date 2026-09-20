@@ -130,6 +130,7 @@ async def vector_search(
     corpus: str | None = None,
     top_k: int = 10,
     meta: dict | None = None,
+    doc_ids: list[str] | None = None,
 ) -> list[ChunkHit]:
     stmt = (
         select(
@@ -143,6 +144,8 @@ async def vector_search(
     )
     if corpus:
         stmt = stmt.where(Document.corpus == corpus)
+    if doc_ids:
+        stmt = stmt.where(Chunk.doc_id.in_(doc_ids))
     stmt = _apply_meta_filters(stmt, meta)
     rows = (await session.execute(stmt)).all()
     return [
@@ -191,6 +194,7 @@ async def keyword_search(
     corpus: str | None = None,
     top_k: int = 10,
     meta: dict | None = None,
+    doc_ids: list[str] | None = None,
 ) -> list[ChunkHit]:
     """Postgres tsvector search ranked by ts_rank (BM25-style)."""
     if not query.strip():
@@ -205,6 +209,10 @@ async def keyword_search(
     if corpus:
         sql += "AND d.corpus = :corpus "
         params["corpus"] = corpus
+    if doc_ids:
+        # Chunk ids are UUID strings — interpolated via bindparams only.
+        sql += "AND c.doc_id = ANY(:mdocids) "
+        params["mdocids"] = list(doc_ids)
     sql, params = _apply_meta_filters_sql(sql, params, meta)
     sql += "ORDER BY rank DESC LIMIT :limit"
     rows = (await session.execute(text(sql), params)).all()

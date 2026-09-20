@@ -6,14 +6,19 @@ document content/chunks/file access, the per-vault knowledge graph export, and
 suggested questions built from the vault's top entities.
 """
 
+import io
+import re
+import zipfile
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import CurrentUser, owned_vault
 from app.core.logging import get_logger
 from app.db.models import Chunk, Document, ImageRecord, IngestJob, Vault
 from app.db.session import get_session
@@ -32,6 +37,7 @@ router = APIRouter(tags=["vaults"])
 
 _MIME_BY_EXT = {
     ".pdf": "application/pdf",
+    ".epub": "application/epub+zip",
     ".md": "text/markdown",
     ".markdown": "text/markdown",
     ".txt": "text/plain",
@@ -122,23 +128,32 @@ async def _summaries(session: AsyncSession, vaults: list[Vault]) -> list[VaultSu
 
 
 @router.get("/vaults", response_model=list[VaultSummary])
-async def list_vaults(session: AsyncSession = Depends(get_session)) -> list[VaultSummary]:
-    vaults = (await session.execute(select(Vault).order_by(Vault.name))).scalars().all()
-    # Self-heal: any corpus without a vault row gets one.
-    missing = set((await session.execute(select(Document.corpus).distinct())).scalars().all()) - {
-        v.name for v in vaults
-    }
-    for name in sorted(missing):
-        await _ensure_vault_row(session, name)
-    if missing:
-        await session.commit()
-        vaults = (await session.execute(select(Vault).order_by(Vault.name))).scalars().all()
+async def list_vaults(
+    session: AsyncSession = Depends(get_session), user: CurrentUser = None
+) -> list[VaultSummary]:
+    stmt = select(Vault).order_by(Vault.name)
+    if user is not None:
+        stmt = stmt.where(Vault.owner_id == user.id)
+    vaults = (await session.execute(stmt)).scalars().all()
+    # Self-heal: any corpus without a vault row gets one. Users mode skips the
+    # sweep — orphan adoption happens at registration, never per-request.
+    if user is None:
+        missing = set(
+            (await session.execute(select(Document.corpus).distinct())).scalars().all()
+        ) - {v.name for v in vaults}
+        for name in sorted(missing):
+            await _ensure_vault_row(session, name)
+        if missing:
+            await session.commit()
+            vaults = (await session.execute(stmt)).scalars().all()
     return await _summaries(session, list(vaults))
 
 
 @router.post("/vaults", response_model=VaultSummary, status_code=201)
 async def create_vault(
-    payload: VaultCreate, session: AsyncSession = Depends(get_session)
+    payload: VaultCreate,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
 ) -> VaultSummary:
     name = payload.name.strip()
     if not name:
@@ -146,7 +161,12 @@ async def create_vault(
     exists = (await session.execute(select(Vault).where(Vault.name == name))).scalar_one_or_none()
     if exists:
         raise HTTPException(status_code=409, detail=f"vault '{name}' already exists")
-    vault = Vault(name=name, description=payload.description, color=payload.color)
+    vault = Vault(
+        name=name,
+        description=payload.description,
+        color=payload.color,
+        owner_id=user.id if user is not None else None,
+    )
     session.add(vault)
     await session.commit()
     return (await _summaries(session, [vault]))[0]
@@ -154,11 +174,12 @@ async def create_vault(
 
 @router.patch("/vaults/{name}", response_model=VaultSummary)
 async def update_vault(
-    name: str, payload: VaultUpdate, session: AsyncSession = Depends(get_session)
+    name: str,
+    payload: VaultUpdate,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
 ) -> VaultSummary:
-    vault = (await session.execute(select(Vault).where(Vault.name == name))).scalar_one_or_none()
-    if vault is None:
-        raise HTTPException(status_code=404, detail="vault not found")
+    vault = await owned_vault(session, user, name)
     if payload.description is not None:
         vault.description = payload.description
     if payload.color is not None:
@@ -168,10 +189,12 @@ async def update_vault(
 
 
 @router.delete("/vaults/{name}")
-async def delete_vault(name: str, session: AsyncSession = Depends(get_session)) -> dict:
-    vault = (await session.execute(select(Vault).where(Vault.name == name))).scalar_one_or_none()
-    if vault is None:
-        raise HTTPException(status_code=404, detail="vault not found")
+async def delete_vault(
+    name: str,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
+) -> dict:
+    vault = await owned_vault(session, user, name)
     store = get_graph_store()
     try:
         if await store.ping():
@@ -186,20 +209,22 @@ async def delete_vault(name: str, session: AsyncSession = Depends(get_session)) 
 
 
 @router.get("/vaults/{name}", response_model=VaultSummary)
-async def vault_detail(name: str, session: AsyncSession = Depends(get_session)) -> VaultSummary:
-    vault = (await session.execute(select(Vault).where(Vault.name == name))).scalar_one_or_none()
-    if vault is None:
-        raise HTTPException(status_code=404, detail="vault not found")
+async def vault_detail(
+    name: str,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
+) -> VaultSummary:
+    vault = await owned_vault(session, user, name)
     return (await _summaries(session, [vault]))[0]
 
 
 @router.get("/vaults/{name}/documents", response_model=list[DocumentSummary])
 async def vault_documents(
-    name: str, session: AsyncSession = Depends(get_session)
+    name: str,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
 ) -> list[DocumentSummary]:
-    vault = (await session.execute(select(Vault).where(Vault.name == name))).scalar_one_or_none()
-    if vault is None:
-        raise HTTPException(status_code=404, detail="vault not found")
+    await owned_vault(session, user, name)
     docs = (
         (
             await session.execute(
@@ -279,13 +304,20 @@ async def vault_documents(
 
 @router.get("/documents/recent", response_model=list[DocumentSummary])
 async def recent_documents(
-    limit: int = Query(12, ge=1, le=100), session: AsyncSession = Depends(get_session)
+    limit: int = Query(12, ge=1, le=100),
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
 ) -> list[DocumentSummary]:
-    docs = (
-        (await session.execute(select(Document).order_by(Document.ingested_at.desc()).limit(limit)))
-        .scalars()
-        .all()
-    )
+    stmt = select(Document).order_by(Document.ingested_at.desc()).limit(limit)
+    if user is not None:
+        owned = select(Vault.name).where(Vault.owner_id == user.id)
+        stmt = (
+            select(Document)
+            .where(Document.corpus.in_(owned))
+            .order_by(Document.ingested_at.desc())
+            .limit(limit)
+        )
+    docs = (await session.execute(stmt)).scalars().all()
     if not docs:
         return []
     doc_ids = [d.id for d in docs]
@@ -330,11 +362,15 @@ async def recent_documents(
 
 @router.get("/documents/{doc_id}", response_model=DocumentSummary)
 async def document_detail(
-    doc_id: str, session: AsyncSession = Depends(get_session)
+    doc_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
 ) -> DocumentSummary:
     d = await session.get(Document, doc_id)
     if d is None:
         raise HTTPException(status_code=404, detail="document not found")
+    if user is not None:
+        await owned_vault(session, user, d.corpus)
     chunk_count = (
         await session.execute(select(func.count(Chunk.id)).where(Chunk.doc_id == doc_id))
     ).scalar_one()
@@ -358,20 +394,30 @@ async def document_detail(
 
 
 @router.get("/documents/{doc_id}/content")
-async def document_content(doc_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+async def document_content(
+    doc_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
+) -> dict:
     d = await session.get(Document, doc_id)
     if d is None:
         raise HTTPException(status_code=404, detail="document not found")
+    if user is not None:
+        await owned_vault(session, user, d.corpus)
     return {"id": doc_id, "text": d.raw_text or ""}
 
 
 @router.get("/documents/{doc_id}/chunks", response_model=list[DocumentChunkOut])
 async def document_chunks(
-    doc_id: str, session: AsyncSession = Depends(get_session)
+    doc_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
 ) -> list[DocumentChunkOut]:
     d = await session.get(Document, doc_id)
     if d is None:
         raise HTTPException(status_code=404, detail="document not found")
+    if user is not None:
+        await owned_vault(session, user, d.corpus)
     rows = (
         (
             await session.execute(
@@ -387,10 +433,16 @@ async def document_chunks(
 
 
 @router.get("/documents/{doc_id}/file")
-async def document_file(doc_id: str, session: AsyncSession = Depends(get_session)) -> FileResponse:
+async def document_file(
+    doc_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
+) -> FileResponse:
     d = await session.get(Document, doc_id)
     if d is None or not d.file_path:
         raise HTTPException(status_code=404, detail="file not found")
+    if user is not None:
+        await owned_vault(session, user, d.corpus)
     path = Path(d.file_path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="file not found on disk")
@@ -402,10 +454,16 @@ async def document_file(doc_id: str, session: AsyncSession = Depends(get_session
 
 
 @router.delete("/documents/{doc_id}")
-async def delete_document(doc_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+async def delete_document(
+    doc_id: str,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
+) -> dict:
     d = await session.get(Document, doc_id)
     if d is None:
         raise HTTPException(status_code=404, detail="document not found")
+    if user is not None:
+        await owned_vault(session, user, d.corpus)
     store = get_graph_store()
     try:
         if await store.ping():
@@ -419,7 +477,12 @@ async def delete_document(doc_id: str, session: AsyncSession = Depends(get_sessi
 
 
 @router.get("/vaults/{name}/graph")
-async def vault_graph(name: str) -> dict:
+async def vault_graph(
+    name: str,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
+) -> dict:
+    await owned_vault(session, user, name)
     store = get_graph_store()
     if not await store.ping():
         raise HTTPException(status_code=503, detail="knowledge graph unavailable (Neo4j down?)")
@@ -427,7 +490,12 @@ async def vault_graph(name: str) -> dict:
 
 
 @router.get("/vaults/{name}/suggestions")
-async def vault_suggestions(name: str) -> dict:
+async def vault_suggestions(
+    name: str,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
+) -> dict:
+    await owned_vault(session, user, name)
     store = get_graph_store()
     entities: list[str] = []
     try:
@@ -448,3 +516,86 @@ async def vault_suggestions(name: str) -> dict:
         ]
     )
     return {"vault": name, "questions": questions[:6]}
+
+
+@router.get("/vaults/{name}/export")
+async def export_vault(
+    name: str,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
+) -> Response:
+    """Obsidian-friendly export: one markdown file per document (frontmatter),
+    plus graph entities/relations when Neo4j is reachable."""
+    await owned_vault(session, user, name)
+    docs = (
+        (
+            await session.execute(
+                select(Document).where(Document.corpus == name).order_by(Document.ingested_at.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    def _slug(title: str, doc_id: str) -> str:
+        base = re.sub(r"[^\w\- ]+", "", title).strip()[:80] or doc_id[:8]
+        return base
+
+    buffer = io.BytesIO()
+    used: set[str] = set()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            f"{name}/README.md",
+            f"# {name}\n\nExported from Metis on {datetime.now(UTC).date()}. "
+            f"{len(docs)} documents. Each file below is a source document with "
+            "YAML frontmatter (title, author, date, source URL, tags).",
+        )
+        for d in docs:
+            slug = _slug(d.title, d.id)
+            counter = 2
+            while slug in used:
+                slug = f"{_slug(d.title, d.id)} {counter}"
+                counter += 1
+            used.add(slug)
+            fm = [
+                "---",
+                f"title: {d.title}",
+                f"vault: {d.corpus}",
+                f"format: {d.format}",
+                f"ingested: {d.ingested_at.date().isoformat() if d.ingested_at else ''}",
+            ]
+            if d.author:
+                fm.append(f"author: {d.author}")
+            if d.source_url:
+                fm.append(f"source: {d.source_url}")
+            if d.tags:
+                fm.append(f"tags: [{', '.join(d.tags)}]")
+            fm += ["---", ""]
+            body = (d.raw_text or "").strip() or "_(no extracted text)_"
+            zf.writestr(f"{name}/documents/{slug}.md", "\n".join(fm) + "\n" + body + "\n")
+
+        # Graph companion files (best-effort — export must survive Neo4j down).
+        try:
+            store = get_graph_store()
+            if await store.ping():
+                graph = await store.vault_graph(name)
+                entity_lines = [f"# Entities in {name}", ""]
+                for node in graph.get("nodes", []):
+                    if node.get("label") == "Entity":
+                        entity_lines.append(f"- {node.get('name', '')}")
+                zf.writestr(f"{name}/graph/entities.md", "\n".join(entity_lines) + "\n")
+                rel_lines = [f"# Relations in {name}", ""]
+                for edge in graph.get("edges", []):
+                    rel_lines.append(
+                        f"- {edge.get('source', '')} —[{edge.get('type', '')}]→ {edge.get('target', '')}"
+                    )
+                zf.writestr(f"{name}/graph/relations.md", "\n".join(rel_lines) + "\n")
+        except Exception as exc:  # noqa: BLE001 — export must survive graph downtime
+            logger.warning("graph export skipped: %s", exc)
+
+    buffer.seek(0)
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{name}-metis-export.zip"'},
+    )

@@ -111,7 +111,12 @@ class Settings(BaseSettings):
     # top-k communities whose summaries feed a deep-lane "global" answer.
     global_relevance_budget: int = 8
 
-    # ── OCR (P6) ────────────────────────────────────────────────────────────
+    # ── Ingestion ───────────────────────────────────────────────────────────
+    # Where raw uploads are stored. Absolute path in prod (ephemeral or
+    # cwd-dependent relative paths break multi-process deployments).
+    upload_dir: str = "uploads"
+
+    # ── OCR (P6) ──────────────────────────────────────────────────────
     # "pytesseract": OCR PDFs with zero extracted text (tesseract binary
     # required, rasterized locally). "" (default): zero-text PDFs are marked
     # `extraction_status=empty` + ingest warning — never silent.
@@ -161,10 +166,13 @@ class Settings(BaseSettings):
     # Set METIS_CORS_ORIGINS (comma-separated) in prod; dev default allows all.
     cors_origins: list[str] = ["*"]
 
-    # ── Access control (see app/core/security.py) ─────────────────────────
-    # Empty = no auth (the localhost/single-user default). Set it before
-    # exposing Metis publicly: every protected route then needs the token.
-    # A shared secret, not an identity system.
+    # ── Access control (see app/core/security.py, app/core/auth.py) ────────
+    # auth_mode: "users" (accounts + per-user vaults; default) | "token"
+    # (shared-secret gate for scripts/evals) | "none" (localhost dev).
+    auth_mode: str = "users"
+    # JWT signing key for users mode. CHANGE THIS in any shared deployment.
+    secret_key: str = "metis-dev-secret-change-me-now-32-bytes+"
+    # Legacy shared-secret gate (used when auth_mode="token"). Empty = open.
     api_token: str = ""
     # Trust `X-Forwarded-For` for rate-limit bucketing. Only enable behind a
     # proxy that overwrites the header, or clients can forge their own bucket.
