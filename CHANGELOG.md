@@ -5,6 +5,23 @@ versions follow the `pyproject.toml` `version` field.
 
 ## [Unreleased]
 
+### Product build (multi-user + connectors + redesigned frontend)
+
+**The demo became a product.** Multi-user accounts with per-user vault ownership,
+EPUB ingestion, source connectors (URL / Readwise / Zotero), save-answer-as-note,
+a vault-wide contradiction report, scoped answers, Obsidian export, the Wikipedia
+agent tool removed (vault-only answers), and a complete frontend redesign in a warm
+editorial style (auth screen, rebuilt chat with citations + selection picker,
+interactive graph explorer, contradictions tab). See the `feat(product)` and
+`feat(frontend)` commits for the full list.
+
+- **Accounts**: `METIS_AUTH_MODE=users` (default) — scrypt + JWT, migration `0012`,
+  first account adopts pre-accounts vaults. `token`/`none` modes preserved.
+- **Frontend QA** (`scripts/frontend_qa.py`) rewritten for the new UI; registers its
+  own `qa@metis.local` session automatically.
+
+### Earlier: refactor + judgment layer
+
 Audit → refactor → judgment-layer integration pass. Headline: **lint/format backlog
 cleared to zero, access control added, and a TypeSafe Jev judgment layer integrated
 at four points with a fifth and sixth instrumented.**

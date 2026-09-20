@@ -13,6 +13,19 @@
 > `torch` plus a ~2.3 GB embedding model. `docs/deployment.md` has the measured options
 > and the exact checklist; that decision is deliberately open rather than papered over.
 
+## Features (what a user actually gets)
+
+- **Accounts & private vaults** — register, sign in, and every vault/document/chat is scoped to your account (`METIS_AUTH_MODE=users` by default; `token`/`none` for scripts and localhost).
+- **Ingest anything** — PDF, EPUB (books!), Markdown, plain text, images (CLIP + vision captions); drag-drop with live indexing progress.
+- **Import connectors** — a web article by URL, your **Readwise** book highlights, or your **Zotero** library (per-request credentials, never stored).
+- **Grounded chat** — streaming answers with numbered citations, per-source score cards, an agent mode that shows its tool calls, and a **document picker** to restrict any answer to a selection ("only compare these three papers").
+- **Knowledge graph** — entities and relations extracted at ingest, communities detected and summarized, and an **interactive explorer**: click an entity, see its neighborhood, jump into a chat about it.
+- **Self-organization** — the graph re-clusters and refreshes community summaries as documents arrive (debounced/nightly policies, audited).
+- **Contradiction detection** — live alerts when retrieved sources disagree, plus a one-click **vault-wide report** with probability bars and both quotes side by side.
+- **The library compounds** — save any answer as a note; it becomes a first-class, citable document.
+- **Obsidian-friendly export** — one frontmattered markdown file per document plus graph entity/relation files.
+- **Judgment layer** — Jev decides (metadata selection, contradiction verdicts, batched eval judging) while the LLM gateway generates; typed, calibrated, opt-in per task. See [docs/jev.md](docs/jev.md).
+
 ## Stack
 
 FastAPI (async) · Postgres + pgvector · Neo4j (GDS) · Redis · sentence-transformers (bge-m3,
