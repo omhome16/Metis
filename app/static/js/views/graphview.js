@@ -1,156 +1,157 @@
+/* Vault knowledge-graph explorer: canvas + entity side panel. */
+
 import { el, clear } from "../util.js";
 import { icon } from "../icons.js";
 import { api } from "../api.js";
-import { renderVaultShell } from "./shell.js";
-import { ForceGraph } from "../graph.js";
+import { createGraph } from "../graph.js";
+import { vaultPath } from "../router.js";
 
-export async function renderGraph(container, vault) {
-  const body = renderVaultShell(container, vault, "graph");
+export async function renderGraph(view, vault) {
+  clear(view);
+  const wrap = el("div", { class: "graph-wrap" });
+  view.append(wrap);
 
-  const stage = el("div", { class: "graph-stage" });
-  const canvas = el("canvas");
-  stage.append(canvas);
+  const holder = el("div", { class: "graph-canvas-holder" });
+  wrap.append(holder);
 
-  // chrome
-  const chrome = el("div", { class: "graph-chrome" });
-  const searchField = el("div", { class: "field graph-search" }, [
-    el("span", { html: icon("search", 15) }),
-    el("input", { placeholder: "Focus an entity", "aria-label": "Focus an entity" }),
-  ]);
-  const tools = el("div", { class: "graph-tools" });
-  const mkTool = (name, title, fn) => {
-    const b = el("button", { class: "tool-btn", title, html: icon(name, 15) });
-    b.addEventListener("click", fn);
-    return b;
-  };
-  tools.append(
-    mkTool("zoomIn", "Zoom in", () => zoomBy(1.3)),
-    mkTool("zoomOut", "Zoom out", () => zoomBy(1 / 1.3)),
-    mkTool("compress", "Fit to view", () => graph.fit()),
-    mkTool("refresh", "Reload graph", () => load())
+  let panel = null;
+
+  const legend = el("div", { class: "graph-legend" });
+  legend.append(
+    legendDot("entity", "Entity"),
+    legendDot("document", "Document")
   );
-  chrome.append(searchField, tools);
-  stage.append(chrome);
+  holder.append(legend);
 
-  const legend = el("div", { class: "graph-legend" }, [
-    el("span", { class: "legend-item" }, [el("span", { class: "legend-dot", style: "background:var(--node-entity)" }), el("span", { text: "Entity" })]),
-    el("span", { class: "legend-item" }, [el("span", { class: "legend-dot sq", style: "background:var(--node-doc)" }), el("span", { text: "Document" })]),
-    el("span", { class: "legend-item" }, [el("span", { class: "legend-dot sq", style: "background:var(--node-image)" }), el("span", { text: "Image" })]),
-  ]);
-  stage.append(legend);
-  stage.append(el("div", { class: "graph-hint", text: "drag nodes · scroll to zoom · click entity to expand" }));
-
-  const graph = new ForceGraph(canvas);
-  graph.onExpand = async (node) => {
-    try {
-      const data = await api.graphExplore(node.name, 1, 40);
-      return graph.expand(toGraph(data));
-    } catch {
-      return null;
-    }
-  };
-  graph.onSelect = (node) => {
-    if (node.label === "Document") {
-      openDocFromGraph(node);
-    }
-  };
-
-  const empty = el("div", { class: "graph-empty hidden" }, [
-    el("div", {}, [
-      el("div", { class: "ge-title", text: "No graph yet" }),
-      el("div", { class: "ge-copy", text: "Entities appear here once documents are indexed — Metis extracts concepts and the relationships between them." }),
-    ]),
-  ]);
-  stage.append(empty);
-
-  const input = searchField.querySelector("input");
-  let entityNames = [];
-  input.addEventListener("input", () => {
-    const q = input.value.trim().toLowerCase();
-    if (!q) return;
-    const match = entityNames.find((n) => n.toLowerCase().includes(q));
-    if (match && match !== graph.selected) {
-      focusEntity(match);
+  const search = el("input", {
+    class: "input",
+    placeholder: "Jump to an entity…",
+    style: "position:absolute;top:14px;left:14px;width:220px;box-shadow:var(--shadow-1)",
+  });
+  search.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      graph.selectByName(search.value.trim());
+      search.blur();
     }
   });
-  input.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter" && input.value.trim()) {
-      const q = input.value.trim().toLowerCase();
-      const match = entityNames.find((n) => n.toLowerCase() === q) || entityNames.find((n) => n.toLowerCase().includes(q));
-      if (match) focusEntity(match);
-    }
+  holder.append(search);
+
+  const graph = createGraph(holder, {
+    onSelect: (node) => showPanel(node),
+    onEmpty: () => {
+      holder.append(
+        el("div", { class: "empty", style: "position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg)" }, [
+          el("div", { class: "glyph", html: icon("network", 28) }),
+          el("h3", { text: "The graph is empty" }),
+          el("p", { text: "Entities and relations are extracted while documents are indexed. Add documents to this vault and the map will draw itself." }),
+        ])
+      );
+    },
   });
 
-  function focusEntity(name) {
-    graph.focus(name);
-    const node = graph.byId.get(name);
-    if (node && node.label === "Entity" && graph.onExpand) {
-      graph.onExpand(node);
-    }
+  try {
+    graph.setData(await api.graph(vault.name));
+  } catch {
+    graph.setData({ nodes: [], edges: [] });
   }
 
-  function zoomBy(f) {
-    const { view, w, h } = graph;
-    view.scale = Math.min(3.5, Math.max(0.25, view.scale * f));
-    const cx = w / 2, cy = h / 2;
-    const wx = (cx - view.x) / view.scale;
-    const wy = (cy - view.y) / view.scale;
-    view.x = cx - wx * view.scale;
-    view.y = cy - wy * view.scale;
-    graph.draw();
+  function legendDot(kind, label) {
+    const s = el("span", { class: "dot", style: `background:${kind === "entity" ? "#D97757" : "#6B7FBC"}` });
+    const item = el("span", {}, [s, label]);
+    return item;
   }
 
-  async function load() {
-    empty.classList.remove("hidden");
-    canvas.classList.add("hidden");
-    try {
-      const data = await api.graph(vault.name);
-      entityNames = data.nodes.filter((n) => n.label === "Entity").map((n) => n.name);
-      if (!data.nodes.length) {
-        graph.setData({ nodes: [], edges: [] });
-        return;
+  async function showPanel(node) {
+    if (panel) panel.remove();
+    if (!node) return;
+
+    panel = el("div", { class: "entity-panel" });
+    wrap.append(panel);
+
+    panel.append(
+      el("button", {
+        class: "icon-btn",
+        style: "float:right",
+        title: "Close panel",
+        html: icon("x", 14),
+      }),
+      el("h3", { text: node.name || node.id?.slice(0, 10) || "Node" }),
+      el("div", { class: "entity-kind", text: node.label || "Node" })
+    );
+    panel.querySelector(".icon-btn").addEventListener("click", () => {
+      panel.remove();
+      panel = null;
+    });
+
+    if (node.label === "Entity") {
+      const chatBtn = el("button", {
+        class: "btn btn-primary",
+        style: "width:100%;margin-bottom:16px",
+        html: `${icon("chat", 15)} Chat about this`,
+      });
+      chatBtn.addEventListener("click", () => {
+        // hand the question to the chat view; deep lane boosts with the graph
+        sessionStorage.setItem("metis.askPrefill", `What is ${node.name}, and how does it connect to the rest of this vault?`);
+        location.hash = vaultPath(vault.name, "ask");
+      });
+      panel.append(chatBtn);
+
+      const listWrap = el("div");
+      listWrap.append(el("div", { class: "section-sub", style: "margin-bottom:6px", text: "Connected" }));
+      const list = el("div", { class: "entity-neighbor-list" });
+      listWrap.append(list);
+      panel.append(listWrap);
+      list.append(el("div", { class: "muted small", text: "Expanding…" }));
+
+      try {
+        const res = await api.graphExplore(node.name, 1, 40);
+        clear(list);
+        const neighbors = (res.neighbors?.nodes || [])
+          .filter((n) => n.name !== node.name)
+          .slice(0, 18);
+        const edgeType = (id) => {
+          const e = (res.neighbors?.edges || []).find(
+            (x) => (x.source === node.id && x.target === id) || (x.target === node.id && x.source === id)
+          );
+          return e ? e.type || "related" : "";
+        };
+        if (!neighbors.length) {
+          list.append(el("div", { class: "muted small", text: "No direct neighbors found." }));
+        }
+        for (const n of neighbors) {
+          const btn = el("button", { class: "entity-neighbor" });
+          btn.append(
+            el("span", {
+              class: "dot",
+              style: `display:inline-block;width:7px;height:7px;border-radius:50%;flex:none;background:${n.label === "Document" ? "#6B7FBC" : "#D97757"}`,
+            }),
+            el("span", { class: "grow", text: n.name || n.id?.slice(0, 8), style: "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" }),
+            el("span", { class: "rel", text: edgeType(n.id) })
+          );
+          btn.addEventListener("click", () => {
+            if (n.label === "Entity") {
+              graph.selectByName(n.name);
+              search.value = n.name;
+            } else {
+              location.hash = vaultPath(vault.name, "documents");
+            }
+          });
+          list.append(btn);
+        }
+      } catch {
+        clear(list);
+        list.append(el("div", { class: "muted small", text: "Graph service unreachable." }));
       }
-      graph.setData(data);
-      empty.classList.add("hidden");
-      canvas.classList.remove("hidden");
-    } catch (err) {
-      empty.querySelector(".ge-copy").textContent = `Could not load the graph: ${err.message || "unknown error"}`;
+    } else if (node.label === "Document") {
+      const open = el("button", {
+        class: "btn btn-secondary",
+        style: "width:100%;margin-bottom:8px",
+        html: `${icon("file", 15)} Open document`,
+      });
+      open.addEventListener("click", () => {
+        location.hash = vaultPath(vault.name, "documents");
+      });
+      panel.append(open);
     }
   }
-
-  body.append(stage);
-
-  // theme changes should recolor the canvas
-  document.addEventListener("metis:theme", () => graph.refreshTheme());
-
-  await load();
-}
-
-/** Convert /graph/explore output into ForceGraph data. */
-function toGraph(data) {
-  const nodes = [];
-  const edges = [];
-  for (const n of data.neighbors || []) {
-    if (!["Entity", "Document", "Image"].includes(n.label)) continue;
-    nodes.push({
-      id: n.value,
-      label: n.label === "Entity" ? "Entity" : n.label,
-      name: n.value,
-      type: n.label,
-      degree: 1,
-    });
-    edges.push({
-      source: data.entity,
-      target: n.value,
-      kind: "RELATED",
-      label: (n.relationships && n.relationships[0]) || "RELATED_TO",
-      weight: 1,
-    });
-  }
-  return { nodes, edges };
-}
-
-function openDocFromGraph(node) {
-  // navigate to the documents tab of the vault (document list shows the file)
-  window.dispatchEvent(new CustomEvent("metis:open-doc", { detail: { id: node.id, title: node.name } }));
 }

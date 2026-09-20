@@ -1,299 +1,293 @@
-import { el, clear, fmtBytes, fmtDate, debounce } from "../util.js";
+/* Vault documents: upload, connectors (URL/Readwise/Zotero), export, inspect. */
+
+import { el, clear, fmtBytes, fmtDate } from "../util.js";
 import { icon } from "../icons.js";
 import { api } from "../api.js";
-import { renderVaultShell } from "./shell.js";
-import { openModal, closeModal, confirmDialog, setModalBody } from "./modal.js";
 import { toast } from "./toast.js";
+import { openModal, closeModal, confirmDialog } from "./modal.js";
 
-export async function renderDocuments(container, vault) {
-  const body = renderVaultShell(container, vault, "documents");
-  body.append(el("div", { class: "doc-sink" }));
+const FMT_ICON = { pdf: "pdf", epub: "book", md: "file", txt: "txt", image: "image" };
 
-  const sink = body.querySelector(".doc-sink");
-  const toolbar = el("div", { class: "toolbar" });
-  const searchField = el("div", { class: "field" }, [
-    el("span", { html: icon("search", 15) }),
-    el("input", { placeholder: "Filter documents", "aria-label": "Filter documents" }),
-  ]);
-  const addBtn = el("button", { class: "btn btn-primary", html: `${icon("upload", 15)}<span>Add documents</span>` });
-  addBtn.addEventListener("click", () => openUploadModal(vault, () => load()));
-  toolbar.append(searchField, addBtn);
-  sink.append(toolbar);
+export async function renderDocuments(view, vault) {
+  clear(view);
+  const wrap = el("div", { class: "docs-wrap" });
+  view.append(wrap);
 
-  const grid = el("div", { class: "doc-grid" });
-  sink.append(grid);
+  wrap.append(
+    el("div", { class: "section-head" }, [
+      el("div", {}, [
+        el("h1", { text: vault.name }),
+        el("p", { class: "section-sub", text: vault.description || "Documents, imports, and the library this vault indexes." }),
+      ]),
+    ])
+  );
 
-  const input = searchField.querySelector("input");
-  input.addEventListener("input", debounce(() => applyFilter(input.value), 120));
+  const toolbar = el("div", { class: "docs-toolbar" });
+  const uploadBtn = el("button", { class: "btn btn-primary", html: `${icon("upload", 15)} Upload files` });
+  const importBtn = el("button", { class: "btn btn-secondary", html: `${icon("link", 15)} Import` });
+  const exportBtn = el("button", { class: "btn btn-secondary", html: `${icon("download", 15)} Export` });
+  toolbar.append(uploadBtn, importBtn, el("span", { class: "spacer" }), exportBtn);
+  wrap.append(toolbar);
 
-  let docs = [];
-  async function load() {
-    grid.classList.add("loading");
-    grid.innerHTML = '<div class="empty" style="grid-column:1/-1;padding:40px"><div class="empty-copy" style="margin:0">Loading documents…</div></div>';
-    try {
-      docs = await api.documents(vault.name);
-    } catch (err) {
-      grid.innerHTML = "";
-      grid.append(emptyState("Could not load documents.", err.message || "", () => load()));
-      return;
-    }
-    grid.classList.remove("loading");
-    render(docs);
-  }
+  const dropzone = el("div", { class: "dropzone" });
+  dropzone.append(
+    el("div", { html: icon("upload", 26), style: "display:flex;justify-content:center;margin-bottom:8px;color:var(--accent)" }),
+    el("div", { text: "Drop files here, or click to browse" }),
+    el("div", { class: "small", style: "margin-top:3px", text: "PDF · EPUB · Markdown · plain text · images" })
+  );
+  wrap.append(dropzone);
 
-  function applyFilter(q) {
-    const needle = q.trim().toLowerCase();
-    render(needle ? docs.filter((d) => d.title.toLowerCase().includes(needle)) : docs);
-  }
+  const fileInput = el("input", { type: "file", multiple: true, class: "hidden", accept: ".pdf,.epub,.md,.markdown,.txt,.png,.jpg,.jpeg,.webp" });
+  wrap.append(fileInput);
 
-  function render(list) {
-    clear(grid);
-    if (!list.length) {
-      grid.append(emptyState(
-        "No documents here yet",
-        "Drop in a PDF, markdown file, plain text, or an image. Metis will chunk it, embed it, and map its relationships.",
-        () => openUploadModal(vault, () => load())
-      ));
-      return;
-    }
-    for (const d of list) {
-      const glyph = d.format === "image" ? "image" : d.format === "pdf" ? "pdf" : d.format === "txt" ? "txt" : "doc";
-      const meta = [fmtBytes(d.size), d.chunk_count ? `${d.chunk_count} chunks` : null, d.image_count ? `${d.image_count} image` : null, fmtDate(d.ingested_at)]
-        .filter(Boolean)
-        .join("  ·  ");
-      const card = el("div", { class: "doc-card", tabindex: "0" });
-      card.append(
-        el("div", { class: "doc-card-top" }, [
-          el("span", { class: `doc-glyph ${d.format}`, html: icon(glyph, 16) }),
-          el("span", { class: `status-badge ${d.status}`, text: d.status }),
-          ...(d.extraction_status && d.extraction_status !== "ok"
-            ? [el("span", { class: `status-badge ${d.extraction_status}`, text: d.extraction_status === "ocr" ? "OCR" : "no text", title: d.extraction_status === "ocr" ? "Text recovered via OCR" : "No extractable text found" })]
-            : []),
-        ]),
-        el("div", { class: "doc-card-title", text: d.title }),
-        el("div", { class: "doc-card-meta", text: meta }),
-        el("div", { class: "doc-card-actions" }, [
-          el("button", { class: "btn btn-ghost", html: `${icon("file", 13)}<span>View</span>`, style: "padding:5px 9px;font-size:12px" }),
-          el("button", { class: "btn btn-ghost", html: `${icon("trash", 13)}`, style: "padding:5px 8px;color:var(--err)" }),
-        ])
-      );
-      const [viewBtn, delBtn] = card.querySelectorAll(".doc-card-actions button");
-      viewBtn.addEventListener("click", (ev) => { ev.stopPropagation(); openDocModal(vault, d, () => load()); });
-      delBtn.addEventListener("click", (ev) => { ev.stopPropagation(); deleteDoc(d); });
-      card.addEventListener("click", () => openDocModal(vault, d, () => load()));
-      card.addEventListener("keydown", (ev) => { if (ev.key === "Enter") openDocModal(vault, d, () => load()); });
-      grid.append(card);
-    }
-  }
+  const list = el("div", { class: "doc-list" });
+  wrap.append(list);
 
-  function emptyState(title, copy, action) {
-    const empty = el("div", { class: "empty", style: "grid-column:1/-1" });
-    empty.append(
-      el("div", { class: "empty-glyph", html: icon("layers", 26) }),
-      el("div", { class: "empty-title", text: title }),
-      el("p", { class: "empty-copy", text: copy }),
-      el("button", { class: "btn btn-primary", text: "Add documents" })
-    );
-    empty.querySelector("button").addEventListener("click", action);
-    return empty;
-  }
+  let pollTimer = null;
 
-  async function deleteDoc(d) {
-    const ok = await confirmDialog({
-      title: `Remove "${d.title}"?`,
-      message: "The document, its chunks, and its graph nodes will be removed from the vault.",
-      confirmLabel: "Remove document",
-    });
-    if (!ok) return;
-    try {
-      await api.deleteDoc(d.id);
-      toast("Document removed.", "ok");
-      load();
-    } catch (err) {
-      toast(err.message || "Could not remove document.", "error");
-    }
-  }
-
-  await load();
-}
-
-/* ── upload modal ─────────────────────────────────────────── */
-
-export function openUploadModal(vault, onDone) {
-  const dz = el("div", { class: "dropzone" });
-  dz.innerHTML = `${icon("upload", 30)}<div class="dropzone-copy">Drop files here, or <strong>browse</strong><div class="hint">pdf · md · txt · png · jpg · webp — up to 50 MB each</div></div>`;
-  const fileInput = el("input", { type: "file", multiple: true, accept: ".pdf,.md,.markdown,.txt,.png,.jpg,.jpeg,.webp", class: "sr-only" });
-  const uploadList = el("div", { class: "upload-list" });
-  const progress = el("div", { class: "progress-track hidden" });
-  const fill = el("div", { class: "progress-fill", style: "width:0%" });
-  progress.append(fill);
-
-  let files = [];
-  const uploadBtn = el("button", { class: "btn btn-primary", text: "Upload to vault" });
-  uploadBtn.disabled = true;
-
-  dz.addEventListener("click", () => fileInput.click());
-  dz.addEventListener("dragover", (ev) => { ev.preventDefault(); dz.classList.add("dragover"); });
-  dz.addEventListener("dragleave", () => dz.classList.remove("dragover"));
-  dz.addEventListener("drop", (ev) => {
-    ev.preventDefault();
-    dz.classList.remove("dragover");
-    addFiles([...ev.dataTransfer.files]);
+  uploadBtn.addEventListener("click", () => fileInput.click());
+  dropzone.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", async () => {
+    if (fileInput.files.length) await doUpload([...fileInput.files]);
+    fileInput.value = "";
   });
-  fileInput.addEventListener("change", () => addFiles([...fileInput.files]));
+  dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("over"); });
+  dropzone.addEventListener("dragleave", () => dropzone.classList.remove("over"));
+  dropzone.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    dropzone.classList.remove("over");
+    if (e.dataTransfer.files.length) await doUpload([...e.dataTransfer.files]);
+  });
 
-  function addFiles(list) {
-    files = files.concat(list.filter((f) => !files.some((x) => x.name === f.name && x.size === f.size)));
-    renderList();
-    uploadBtn.disabled = !files.length;
-  }
-
-  function renderList() {
-    clear(uploadList);
-    for (const f of files) {
-      const row = el("div", { class: "upload-row" });
-      const stateEl = el("span", { class: "up-state", text: fmtBytes(f.size) });
-      const nameEl = el("span", { class: "up-name", text: f.name });
-      const rm = el("button", { class: "icon-btn", title: "Remove", html: icon("x", 13), style: "width:24px;height:24px" });
-      rm.addEventListener("click", () => {
-        files = files.filter((x) => x !== f);
-        renderList();
-        uploadBtn.disabled = !files.length;
-      });
-      row.append(nameEl, stateEl, rm);
-      uploadList.append(row);
+  importBtn.addEventListener("click", openImportModal);
+  exportBtn.addEventListener("click", async () => {
+    toast("Building your export…", "info");
+    try {
+      await api.exportVault(vault.name);
+      toast("Export downloaded — unzip into Obsidian or any markdown vault.", "ok");
+    } catch (err) {
+      toast(err.message || "Export failed.", "error");
     }
-  }
+  });
 
-  uploadBtn.addEventListener("click", async () => {
-    if (!files.length) return;
+  async function doUpload(files) {
     uploadBtn.disabled = true;
-    uploadBtn.textContent = "Uploading…";
-    progress.classList.remove("hidden");
+    dropzone.textContent = "Uploading…";
     try {
       const res = await api.ingest(vault.name, files);
-      fill.style.width = "12%";
-      await pollJob(res.job_id, fill);
-      toast(`${res.files_added} document${res.files_added === 1 ? "" : "s"} added to "${vault.name}".`, "ok");
-      closeModal();
-      if (onDone) onDone();
+      toast(`${res.files_added} file${res.files_added === 1 ? "" : "s"} queued for indexing.`, "ok");
+      await loadDocs();
+      pollJob(res.job_id);
     } catch (err) {
       toast(err.message || "Upload failed.", "error");
+    } finally {
       uploadBtn.disabled = false;
-      uploadBtn.textContent = "Upload to vault";
+      dropzone.innerHTML = "";
+      dropzone.append(
+        el("div", { html: icon("upload", 26), style: "display:flex;justify-content:center;margin-bottom:8px;color:var(--accent)" }),
+        el("div", { text: "Drop files here, or click to browse" }),
+        el("div", { class: "small", style: "margin-top:3px", text: "PDF · EPUB · Markdown · plain text · images" })
+      );
     }
-  });
+  }
 
-  openModal({
-    title: `Add documents to ${vault.name}`,
-    sub: "Files are indexed in the background — chunking, embeddings, and graph extraction.",
-    body: (b) => {
-      b.append(dz, fileInput, uploadList, progress);
-      if (!files.length) uploadBtn.disabled = true;
-    },
-    footer: [el("button", { class: "btn btn-ghost", text: "Cancel", onclick: () => closeModal() }), uploadBtn],
-  });
-}
-
-function pollJob(jobId, fill) {
-  return new Promise((resolve, reject) => {
-    const tick = async () => {
+  function pollJob(jobId) {
+    if (!jobId || pollTimer) return;
+    let checks = 0;
+    pollTimer = setInterval(async () => {
       try {
         const job = await api.job(jobId);
-        fill.style.width = `${Math.max(parseFloat(fill.style.width || "0"), job.progress)}%`;
-        if (job.status === "done" || job.status === "failed") {
+        if (job.status === "done" || job.status === "failed" || ++checks > 240) {
+          clearInterval(pollTimer);
+          pollTimer = null;
           if (job.status === "failed" && Object.keys(job.per_file_errors || {}).length) {
-            reject(new Error(`Some files failed to index: ${Object.values(job.per_file_errors)[0]}`));
-            return;
+            toast("Some files failed to index — see the document list.", "error");
           }
-          resolve();
-          return;
+          await loadDocs();
+        } else if (checks % 3 === 0) {
+          await loadDocs(); // refresh statuses while the worker runs
         }
-        setTimeout(tick, 1400);
-      } catch (err) {
-        reject(err);
+      } catch {
+        clearInterval(pollTimer);
+        pollTimer = null;
       }
-    };
-    tick();
-  });
-}
-
-/* ── document detail modal ────────────────────────────────── */
-
-async function openDocModal(vault, doc, onDeleted) {
-  const modal = openModal({
-    title: doc.title,
-    sub: `${doc.corpus}  ·  ${doc.format.toUpperCase()}  ·  ${fmtBytes(doc.size)}  ·  ${fmtDate(doc.ingested_at)}`,
-    body: (b) => b.append(el("div", { class: "empty-copy", text: "Loading…", style: "margin:0" })),
-    footer: [el("button", { class: "btn btn-ghost", text: "Close", onclick: () => closeModal() })],
-    wide: true,
-  });
-
-  let content = "";
-  let chunks = [];
-  try {
-    const [c, ch] = await Promise.all([api.docContent(doc.id), api.docChunks(doc.id)]);
-    content = c.text || "";
-    chunks = ch;
-  } catch { /* content optional */ }
-
-  const tabsEl = el("div", { class: "modal-tabs" });
-  const tabContent = el("div", { style: "padding:16px 22px 20px" });
-  const delBtn = el("button", { class: "btn btn-danger", html: `${icon("trash", 14)}<span>Remove</span>` });
-  delBtn.addEventListener("click", async () => {
-    const ok = await confirmDialog({
-      title: `Remove "${doc.title}"?`,
-      message: "This removes the document and its chunks from the vault.",
-      confirmLabel: "Remove document",
-    });
-    if (!ok) return;
-    try {
-      await api.deleteDoc(doc.id);
-      toast("Document removed.", "ok");
-      closeModal();
-      if (onDeleted) onDeleted();
-    } catch (err) {
-      toast(err.message || "Could not remove document.", "error");
-    }
-  });
-  const foot = modal.querySelector(".modal-foot");
-  foot.prepend(delBtn);
-
-  const contentTab = el("button", { class: "tab active", text: "Content" });
-  const chunksTab = el("button", { class: "tab", text: `Chunks (${chunks.length})` });
-  contentTab.addEventListener("click", () => { contentTab.classList.add("active"); chunksTab.classList.remove("active"); renderContent(); });
-  chunksTab.addEventListener("click", () => { chunksTab.classList.add("active"); contentTab.classList.remove("active"); renderChunks(); });
-  tabsEl.append(contentTab, chunksTab);
-
-  function renderContent() {
-    clear(tabContent);
-    if (doc.format === "image") {
-      tabContent.append(el("img", { class: "doc-image", src: api.docFileUrl(doc.id), alt: doc.title }));
-    } else if (content) {
-      tabContent.append(el("div", { class: "doc-content", text: content }));
-    } else {
-      tabContent.append(el("p", { class: "ask-panel-empty", text: "No extractable text for this document." }));
-    }
+    }, 2500);
   }
 
-  function renderChunks() {
-    clear(tabContent);
-    if (!chunks.length) {
-      tabContent.append(el("p", { class: "ask-panel-empty", text: "No chunks yet — indexing may still be running." }));
+  async function loadDocs() {
+    const docs = await api.documents(vault.name).catch(() => []);
+    clear(list);
+    if (!docs.length) {
+      list.append(
+        el("div", { class: "empty" }, [
+          el("div", { class: "glyph", html: icon("book", 26) }),
+          el("h3", { text: "Nothing here yet" }),
+          el("p", { text: "Upload files, import from the web, Readwise, or Zotero. Everything you add gets indexed into this vault's knowledge graph." }),
+        ])
+      );
       return;
     }
-    for (const c of chunks) {
-      tabContent.append(el("div", { class: "chunk-item" }, [
-        el("div", { class: "chunk-item-head" }, [
-          el("span", { text: `#${c.index}` }),
-          el("span", { text: `${c.tokens} tokens` }),
-        ]),
-        el("div", { class: "chunk-item-text", text: c.text }),
-      ]));
-    }
+    for (const d of docs) list.append(docRow(d));
   }
 
-  const bodyEl = modal.querySelector(".modal-body");
-  bodyEl.append(tabsEl, tabContent);
-  renderContent();
+  function docRow(d) {
+    const statusClass = d.status === "indexed" ? "ok" : d.status === "error" ? "error" : "pending";
+    const statusText = d.status === "indexed" ? "indexed" : d.status === "error" ? "error" : "indexing…";
+    const row = el("div", { class: "doc-row card" });
+    row.append(
+      el("span", { class: "icon", html: icon(FMT_ICON[d.format] || "file", 18) }),
+      el("div", { class: "main" }, [
+        el("div", { class: "title", text: d.title }),
+        el("div", { class: "sub" }, [
+          el("span", { text: fmtDate(d.ingested_at) }),
+          el("span", { text: `${d.chunk_count} chunks` }),
+          d.image_count ? el("span", { text: `${d.image_count} images` }) : "",
+          d.size ? el("span", { text: fmtBytes(d.size) }) : "",
+        ].filter(Boolean)),
+      ]),
+      el("span", { class: `doc-status ${statusClass}`, text: statusText }),
+      el("div", { class: "rail-actions" }, [
+        el("button", { class: "icon-btn", title: "Download original", html: icon("download", 15) }),
+        el("button", { class: "icon-btn", title: "Delete", html: icon("trash", 15) }),
+      ])
+    );
+    const [dl, del] = row.querySelectorAll(".rail-actions .icon-btn");
+    dl.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      api.docFile(d.id, d.title).catch((err) => toast(err.message, "error"));
+    });
+    del.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      if (!(await confirmDialog({ title: "Delete document", message: `"${d.title}" and its index entries will be removed.` }))) return;
+      await api.deleteDoc(d.id).catch((err) => toast(err.message, "error"));
+      loadDocs();
+    });
+    row.addEventListener("click", () => openDocModal(d));
+    return row;
+  }
+
+  async function openDocModal(d) {
+    openModal({
+      title: d.title,
+      sub: `${d.corpus} · ${d.format} · ${d.status}`,
+      wide: true,
+      body: async (b) => {
+        const tabs = el("div", { class: "seg", style: "margin-bottom:14px" });
+        const contentBtn = el("button", { class: "active", text: "Content" });
+        const chunkBtn = el("button", { text: `Chunks (${d.chunk_count})` });
+        tabs.append(contentBtn, chunkBtn);
+        const bodyBox = el("div", { class: "doc-content", style: "white-space:pre-wrap;font-size:13.5px;line-height:1.7;color:var(--ink-2);max-height:52vh;overflow-y:auto" });
+        b.append(tabs, bodyBox);
+        const loadContent = async () => {
+          contentBtn.classList.add("active");
+          chunkBtn.classList.remove("active");
+          const c = await api.docContent(d.id).catch(() => ({ text: "(unavailable)" }));
+          clear(bodyBox);
+          bodyBox.textContent = c.text || "(no extracted text)";
+        };
+        const loadChunks = async () => {
+          chunkBtn.classList.add("active");
+          contentBtn.classList.remove("active");
+          const chunks = await api.docChunks(d.id).catch(() => []);
+          clear(bodyBox);
+          bodyBox.style.whiteSpace = "normal";
+          for (const ch of chunks) {
+            bodyBox.append(
+              el("div", { class: "panel", style: "padding:10px 14px;margin-bottom:8px" }, [
+                el("div", { class: "muted mono small", text: `chunk ${ch.index} · ${ch.tokens} tokens` }),
+                el("div", { style: "font-size:12.5px;margin-top:4px;color:var(--ink-2)", text: ch.text }),
+              ])
+            );
+          }
+          bodyBox.style.whiteSpace = "pre-wrap";
+        };
+        contentBtn.addEventListener("click", loadContent);
+        chunkBtn.addEventListener("click", loadChunks);
+        await loadContent();
+      },
+      footer: [
+        el("button", {
+          class: "btn btn-secondary btn-sm",
+          html: `${icon("download", 14)} Original file`,
+          onclick: () => api.docFile(d.id, d.title).catch((err) => toast(err.message, "error")),
+        }),
+        el("button", { class: "btn btn-ghost btn-sm", text: "Close", onclick: closeModal }),
+      ],
+    });
+  }
+
+  function openImportModal() {
+    const tabs = el("div", { class: "seg", style: "margin-bottom:16px" });
+    const urlBtn = el("button", { class: "active", text: "Web page" });
+    const rwBtn = el("button", { text: "Readwise" });
+    const zoBtn = el("button", { text: "Zotero" });
+    tabs.append(urlBtn, rwBtn, zoBtn);
+    const box = el("div");
+
+    const field = (label, input) => el("div", { class: "field" }, [el("label", { text: label }), input]);
+    const urlInput = el("input", { class: "input", placeholder: "https://example.com/article" });
+    const rwToken = el("input", { class: "input", placeholder: "Readwise access token", type: "password" });
+    const zoKey = el("input", { class: "input", placeholder: "Zotero API key", type: "password" });
+    const zoUser = el("input", { class: "input", placeholder: "Zotero user ID" });
+
+    const go = el("button", { class: "btn btn-primary", text: "Import" });
+    const hint = el("p", { class: "form-hint" });
+    go.addEventListener("click", async () => {
+      go.disabled = true;
+      go.textContent = "Importing…";
+      try {
+        let res;
+        if (urlBtn.classList.contains("active")) {
+          res = await api.importUrl({ corpus: vault.name, url: urlInput.value.trim() });
+        } else if (rwBtn.classList.contains("active")) {
+          res = await api.importReadwise({ corpus: vault.name, token: rwToken.value.trim() });
+        } else {
+          res = await api.importZotero({ corpus: vault.name, api_key: zoKey.value.trim(), user_id: zoUser.value.trim() });
+        }
+        toast(`${res.files_added} item${res.files_added === 1 ? "" : "s"} queued for indexing.`, "ok");
+        closeModal();
+        loadDocs();
+      } catch (err) {
+        hint.textContent = err.message || "Import failed.";
+        hint.style.color = "var(--danger)";
+        go.disabled = false;
+        go.textContent = "Import";
+      }
+    });
+
+    const paintUrl = () => {
+      clear(box);
+      box.append(field("Page URL", urlInput), el("p", { class: "form-hint", text: "The article's main text is extracted and indexed." }));
+    };
+    const paintRw = () => {
+      clear(box);
+      box.append(
+        field("Readwise access token", rwToken),
+        el("p", { class: "form-hint", text: "Create one at readwise.io/access_token. Books with highlights become documents. The token is used for this import only — never stored." })
+      );
+    };
+    const paintZo = () => {
+      clear(box);
+      box.append(
+        field("Zotero API key", zoKey),
+        field("Zotero user ID", zoUser),
+        el("p", { class: "form-hint", text: "Create a key at zotero.org/settings/keys (read access). Item titles and abstracts become documents." })
+      );
+    };
+    urlBtn.addEventListener("click", () => { [urlBtn, rwBtn, zoBtn].forEach((b) => b.classList.remove("active")); urlBtn.classList.add("active"); paintUrl(); });
+    rwBtn.addEventListener("click", () => { [urlBtn, rwBtn, zoBtn].forEach((b) => b.classList.remove("active")); rwBtn.classList.add("active"); paintRw(); });
+    zoBtn.addEventListener("click", () => { [urlBtn, rwBtn, zoBtn].forEach((b) => b.classList.remove("active")); zoBtn.classList.add("active"); paintZo(); });
+
+    openModal({
+      title: "Import into this vault",
+      sub: "Bring sources in from where they already live.",
+      body: (b) => {
+        b.append(tabs, box, hint);
+        paintUrl();
+      },
+      footer: [go],
+    });
+  }
+
+  await loadDocs();
 }

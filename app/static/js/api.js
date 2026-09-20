@@ -1,35 +1,48 @@
-/* Thin API client for the Metis backend. */
+/* Thin API client for the Metis backend (JWT bearer + legacy token probe). */
 
 const enc = encodeURIComponent;
+const JWT_KEY = "metis.jwt";
 const TOKEN_KEY = "metis.apiToken";
 
-/** The API token this browser holds ("" when the instance needs none). */
+export function jwt() {
+  try { return localStorage.getItem(JWT_KEY) || ""; } catch { return ""; }
+}
+
+export function setJwt(token) {
+  try {
+    if (token) localStorage.setItem(JWT_KEY, token);
+    else localStorage.removeItem(JWT_KEY);
+  } catch { /* storage unavailable */ }
+}
+
+/** Legacy shared-secret token (METIS_AUTH_MODE=token deployments). */
 export function apiToken() {
   try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; }
 }
 
-/** Remember (or forget) the token; private-mode storage failures stay silent. */
 export function setApiToken(token) {
   try {
     if (token) localStorage.setItem(TOKEN_KEY, token);
     else localStorage.removeItem(TOKEN_KEY);
-  } catch { /* storage unavailable — requests just stay anonymous */ }
+  } catch { /* storage unavailable */ }
 }
 
 function authHeaders(base = {}) {
-  const token = apiToken();
-  return token ? { ...base, Authorization: `Bearer ${token}` } : base;
+  const h = { ...base };
+  const t = jwt() || apiToken();
+  if (t) h.Authorization = `Bearer ${t}`;
+  return h;
 }
 
 /** Append the token for browser navigations that cannot set headers. */
 function withToken(url) {
-  const token = apiToken();
-  if (!token) return url;
-  return `${url}${url.includes("?") ? "&" : "?"}token=${enc(token)}`;
+  const t = apiToken();
+  if (!t) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}token=${enc(t)}`;
 }
 
-async function request(method, url, { json, form } = {}, retried = false) {
-  const opts = { method, signal: undefined };
+async function request(method, url, { json, form } = {}) {
+  const opts = { method };
   if (json !== undefined) {
     opts.headers = { "Content-Type": "application/json" };
     opts.body = JSON.stringify(json);
@@ -38,13 +51,9 @@ async function request(method, url, { json, form } = {}, retried = false) {
   }
   opts.headers = authHeaders(opts.headers || {});
   const res = await fetch(url, opts);
-  if (res.status === 401 && !retried && typeof window !== "undefined") {
-    // The instance is token-protected and this browser has none (or a stale one).
-    const entered = window.prompt("This Metis instance requires an API token:");
-    if (entered && entered.trim()) {
-      setApiToken(entered.trim());
-      return request(method, url, { json, form }, true);
-    }
+  if (res.status === 401 && typeof window !== "undefined") {
+    // Signed out (or token missing): let the auth view take over.
+    window.dispatchEvent(new CustomEvent("metis:auth-required"));
   }
   if (!res.ok) {
     let detail = res.statusText;
@@ -60,41 +69,45 @@ async function request(method, url, { json, form } = {}, retried = false) {
   return ct.includes("application/json") ? res.json() : res.text();
 }
 
+/** Fetch a binary (file download / export) with auth, and trigger a save. */
+async function download(url, filename) {
+  const res = await fetch(url, { headers: authHeaders() });
+  if (res.status === 401) window.dispatchEvent(new CustomEvent("metis:auth-required"));
+  if (!res.ok) throw new Error(`download failed (${res.status})`);
+  const blob = await res.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
 export const api = {
+  // auth
+  register: (data) => request("POST", "/api/v1/auth/register", { json: data }),
+  login: (data) => request("POST", "/api/v1/auth/login", { json: data }),
+  me: () => request("GET", "/api/v1/auth/me"),
+
+  // vaults
   vaults: () => request("GET", "/api/v1/vaults"),
   createVault: (data) => request("POST", "/api/v1/vaults", { json: data }),
   updateVault: (name, data) => request("PATCH", `/api/v1/vaults/${enc(name)}`, { json: data }),
   deleteVault: (name) => request("DELETE", `/api/v1/vaults/${enc(name)}`),
   vaultDetail: (name) => request("GET", `/api/v1/vaults/${enc(name)}`),
 
+  // documents
   documents: (name) => request("GET", `/api/v1/vaults/${enc(name)}/documents`),
   recentDocs: () => request("GET", "/api/v1/documents/recent"),
-  graph: (name) => request("GET", `/api/v1/vaults/${enc(name)}/graph`),
-  suggestions: (name) => request("GET", `/api/v1/vaults/${enc(name)}/suggestions`),
-  graphExplore: (entity, depth = 1, limit = 40) =>
-    request("GET", `/api/v1/graph/explore?entity=${enc(entity)}&depth=${depth}&limit=${limit}`),
-
-  libraryGraph: () => request("GET", "/api/v1/library/graph"),
-  libraryEntities: (q, limit = 12) => request("GET", `/api/v1/library/entities?q=${enc(q)}&limit=${limit}`),
-  librarySurprises: () => request("GET", "/api/v1/library/surprises"),
-  libraryJourney: (from, to) => request("GET", `/api/v1/library/journey?from=${enc(from)}&to=${enc(to)}`),
-  reorgRuns: (limit = 8) => request("GET", `/api/v1/library/reorganizations?limit=${limit}`),
-
-  settings: () => request("GET", "/api/v1/settings"),
-  saveSettings: (data) => request("PUT", "/api/v1/settings", { json: { settings: data } }),
-  runCommunities: () => request("POST", "/api/v1/graph/communities"),
-
   doc: (id) => request("GET", `/api/v1/documents/${id}`),
   docContent: (id) => request("GET", `/api/v1/documents/${id}/content`),
   docChunks: (id) => request("GET", `/api/v1/documents/${id}/chunks`),
+  docFile: (id, filename) => download(`/api/v1/documents/${id}/file`, filename || "document"),
   docFileUrl: (id) => withToken(`/api/v1/documents/${id}/file`),
   deleteDoc: (id) => request("DELETE", `/api/v1/documents/${id}`),
 
-  conversations: (name) => request("GET", `/api/v1/vaults/${enc(name)}/conversations`),
-  conversation: (id) => request("GET", `/api/v1/conversations/${id}`),
-  deleteConversation: (id) => request("DELETE", `/api/v1/conversations/${id}`),
-  feedback: (messageId, data) => request("POST", `/api/v1/ask/${enc(messageId)}/feedback`, { json: data }),
-
+  // ingest
   ingest: (corpus, files) => {
     const fd = new FormData();
     fd.append("corpus", corpus);
@@ -102,6 +115,44 @@ export const api = {
     return request("POST", "/api/v1/ingest", { form: fd });
   },
   job: (id) => request("GET", `/api/v1/ingest/${id}`),
+
+  // imports (URL / Readwise / Zotero)
+  importUrl: (data) => request("POST", "/api/v1/imports/url", { json: data }),
+  importReadwise: (data) => request("POST", "/api/v1/imports/readwise", { json: data }),
+  importZotero: (data) => request("POST", "/api/v1/imports/zotero", { json: data }),
+
+  // notes
+  saveNote: (name, data) => request("POST", `/api/v1/vaults/${enc(name)}/notes`, { json: data }),
+
+  // contradiction report
+  contradictionReport: (name) => request("POST", `/api/v1/vaults/${enc(name)}/contradiction-report`),
+
+  // export
+  exportVault: (name) => download(`/api/v1/vaults/${enc(name)}/export`, `${name}-metis-export.zip`),
+
+  // graph
+  graph: (name) => request("GET", `/api/v1/vaults/${enc(name)}/graph`),
+  suggestions: (name) => request("GET", `/api/v1/vaults/${enc(name)}/suggestions`),
+  graphExplore: (entity, depth = 1, limit = 40) =>
+    request("GET", `/api/v1/graph/explore?entity=${enc(entity)}&depth=${depth}&limit=${limit}`),
+
+  // cross-vault library
+  libraryGraph: () => request("GET", "/api/v1/library/graph"),
+  libraryEntities: (q, limit = 12) => request("GET", `/api/v1/library/entities?q=${enc(q)}&limit=${limit}`),
+  librarySurprises: () => request("GET", "/api/v1/library/surprises"),
+  libraryJourney: (from, to) => request("GET", `/api/v1/library/journey?from=${enc(from)}&to=${enc(to)}`),
+  reorgRuns: (limit = 8) => request("GET", `/api/v1/library/reorganizations?limit=${limit}`),
+
+  // settings
+  settings: () => request("GET", "/api/v1/settings"),
+  saveSettings: (data) => request("PUT", "/api/v1/settings", { json: { settings: data } }),
+  runCommunities: () => request("POST", "/api/v1/graph/communities"),
+
+  // conversations
+  conversations: (name) => request("GET", `/api/v1/vaults/${enc(name)}/conversations`),
+  conversation: (id) => request("GET", `/api/v1/conversations/${id}`),
+  deleteConversation: (id) => request("DELETE", `/api/v1/conversations/${id}`),
+  feedback: (messageId, data) => request("POST", `/api/v1/ask/${enc(messageId)}/feedback`, { json: data }),
 
   health: () => request("GET", "/healthz"),
   cacheStats: () => request("GET", "/api/v1/cache/stats"),
@@ -118,6 +169,7 @@ export async function askStream(payload, onEvent, signal) {
     body: JSON.stringify(payload),
     signal,
   });
+  if (res.status === 401) window.dispatchEvent(new CustomEvent("metis:auth-required"));
   if (!res.ok || !res.body) {
     let detail = res.statusText;
     try {
