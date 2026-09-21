@@ -164,7 +164,7 @@ flowchart LR
     R -->|fast| CHAT[Greet / chit-chat<br/>no retrieval]
     R -->|standard / deep| CACHE[(Semantic cache<br/>Postgres, cosine >= 0.92<br/>+ near-duplicate guard)]
     CACHE -->|hit| GEN2[Replay cached answer<br/>cached: true]
-    CACHE -->|miss|    RW[Query rewrite +<br/>filter selection<br/>Jev Choice or LLM]
+    CACHE -->|miss| RW[Query rewrite +<br/>filter selection<br/>Jev Choice or LLM]
     RW --> HY[Hybrid retrieval<br/>pgvector + FTS, RRF fusion]
     HY --> GB[Graph boost<br/>entity neighbor chunks]
     GB --> RR[Cross-encoder rerank<br/>bge-reranker-base]
