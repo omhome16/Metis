@@ -29,10 +29,11 @@ jobs:
         with:
           enable-cache: true
       # No model weights or DB needed to lint, so skip the dev group's heavy ML
-      # extras and install just ruff.
+      # extras. ruff itself runs via uvx, pinned to the uv.lock version so CI
+      # lints with exactly what `uv sync` installs locally.
       - run: uv sync --frozen --no-dev
-      - run: uv run --no-project ruff check .
-      - run: uv run --no-project ruff format --check .
+      - run: uvx ruff@0.16.2 check .
+      - run: uvx ruff@0.16.2 format --check .
 
   test:
     name: Tests
