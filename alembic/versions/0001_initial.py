@@ -6,9 +6,10 @@ Create Date: 2026-08-08
 
 """
 
-from alembic import op
 import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "0001"
@@ -38,7 +39,12 @@ def upgrade() -> None:
     op.create_table(
         "chunks",
         sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("doc_id", sa.String(36), sa.ForeignKey("documents.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "doc_id",
+            sa.String(36),
+            sa.ForeignKey("documents.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column("text", sa.Text(), nullable=False),
         sa.Column("chunk_index", sa.Integer(), nullable=False),
         sa.Column("tokens", sa.Integer(), nullable=False),
@@ -49,7 +55,12 @@ def upgrade() -> None:
     op.create_table(
         "images",
         sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("doc_id", sa.String(36), sa.ForeignKey("documents.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "doc_id",
+            sa.String(36),
+            sa.ForeignKey("documents.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column("file_path", sa.String(1024), nullable=False),
         sa.Column("caption", sa.Text(), nullable=True),
         sa.Column("tags", sa.ARRAY(sa.String(128)), nullable=False, server_default="{}"),
@@ -81,7 +92,9 @@ def upgrade() -> None:
         sa.Column("corpus", sa.String(128), nullable=False),
         sa.Column("status", sa.String(16), nullable=False, server_default="queued"),
         sa.Column("progress", sa.Float(), nullable=False, server_default="0"),
-        sa.Column("per_file_errors", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")),
+        sa.Column(
+            "per_file_errors", sa.JSON(), nullable=False, server_default=sa.text("'{}'::json")
+        ),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
     )

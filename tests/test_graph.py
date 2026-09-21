@@ -1,9 +1,5 @@
 import uuid
 
-import pytest
-
-from app.graph.store import get_graph_store
-
 
 def _uniq(suffix: str) -> str:
     return f"{suffix}-{uuid.uuid4().hex[:6]}"
@@ -30,7 +26,9 @@ async def test_schema_and_upsert(require_graph):
     n_entities = await store.entity_count("test-graph")
     assert n_entities == 3
     async with store._driver.session() as session:
-        rec = await (await session.run("MATCH (d:Document {corpus: 'test-graph'}) RETURN count(d) AS c")).single()
+        rec = await (
+            await session.run("MATCH (d:Document {corpus: 'test-graph'}) RETURN count(d) AS c")
+        ).single()
     assert rec["c"] == 1
 
 
@@ -46,7 +44,10 @@ async def test_neighbor_chunk_ids(require_graph):
         doc_id=_uniq("doc"),
         title="t",
         corpus="test-graph",
-        chunks=[(chunk_a, f"{ent_a} marched to the sea.", 0), (chunk_b, f"{ent_b} wrote about {ent_a}.", 1)],
+        chunks=[
+            (chunk_a, f"{ent_a} marched to the sea.", 0),
+            (chunk_b, f"{ent_b} wrote about {ent_a}.", 1),
+        ],
         entities=[{"name": ent_a, "type": "Person"}, {"name": ent_b, "type": "Person"}],
         relations=[],
     )
@@ -115,9 +116,7 @@ async def test_entity_normalization_aliases(require_graph):
     )
     async with store._driver.session() as session:
         rec = await (
-            await session.run(
-                "MATCH (e:Entity) WHERE e.canonical = 'neo4j' RETURN count(e) AS c"
-            )
+            await session.run("MATCH (e:Entity) WHERE e.canonical = 'neo4j' RETURN count(e) AS c")
         ).single()
         assert rec["c"] == 1
         rec = await (
@@ -150,9 +149,7 @@ async def test_alias_merge_idempotent_reingest(require_graph):
         )
     async with store._driver.session() as session:
         rec = await (
-            await session.run(
-                "MATCH (e:Entity {canonical: 'metisapp'}) RETURN count(e) AS c"
-            )
+            await session.run("MATCH (e:Entity {canonical: 'metisapp'}) RETURN count(e) AS c")
         ).single()
         assert rec["c"] == 1
         rec = await (

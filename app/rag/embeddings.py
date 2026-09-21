@@ -111,7 +111,9 @@ class MockImageEmbedder:
 
     async def embed_image(self, data: bytes, mime: str = "image/png") -> list[float]:
         digest = hashlib.sha256(data).digest()
-        raw = b"".join(digest for _ in range((self.dim + len(digest) - 1) // len(digest)))[: self.dim]
+        raw = b"".join(digest for _ in range((self.dim + len(digest) - 1) // len(digest)))[
+            : self.dim
+        ]
         vec = [b / 255.0 for b in raw]
         norm = sum(x * x for x in vec) ** 0.5 or 1.0
         return [x / norm for x in vec]

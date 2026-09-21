@@ -46,19 +46,30 @@ async def _seed_corpus(corpus: str) -> None:
     embedder = get_embedder()
     async with async_session_factory() as session:
         doc = Document(
-            id=str(uuid.uuid4()), title="fastapi-notes", corpus=corpus, format="txt",
-            content_hash=uuid.uuid4().hex, raw_text="FastAPI was created by Sebastián Ramírez in 2018.",
+            id=str(uuid.uuid4()),
+            title="fastapi-notes",
+            corpus=corpus,
+            format="txt",
+            content_hash=uuid.uuid4().hex,
+            raw_text="FastAPI was created by Sebastián Ramírez in 2018.",
         )
         session.add(doc)
         await session.commit()
-        chunks = ["FastAPI was created by Sebastián Ramírez in 2018.", "Pydantic powers validation."]
+        chunks = [
+            "FastAPI was created by Sebastián Ramírez in 2018.",
+            "Pydantic powers validation.",
+        ]
         embs = await embedder.embed_texts(chunks)
         await store_chunks(session, doc.id, chunks, embs)
 
 
 async def _cleanup(corpus: str) -> None:
     async with async_session_factory() as session:
-        await session.execute(delete(Chunk).where(Chunk.doc_id.in_(select(Document.id).where(Document.corpus == corpus))))
+        await session.execute(
+            delete(Chunk).where(
+                Chunk.doc_id.in_(select(Document.id).where(Document.corpus == corpus))
+            )
+        )
         await session.execute(delete(Document).where(Document.corpus == corpus))
         await session.execute(delete(GoldenQuestion).where(GoldenQuestion.corpus == corpus))
         await session.execute(delete(EvalRun))
@@ -83,10 +94,18 @@ async def test_run_eval_end_to_end(require_db):
         await session.commit()
 
     async with async_session_factory() as session:
-        report = await run_eval(session, EvalGateway(), corpus, {"rerank_enabled": False, "graph_boost": False})
+        report = await run_eval(
+            session, EvalGateway(), corpus, {"rerank_enabled": False, "graph_boost": False}
+        )
     assert report["questions"] == 1
     m = report["metrics"]
-    for key in ("faithfulness", "answer_relevancy", "context_precision", "context_recall", "citation_correctness"):
+    for key in (
+        "faithfulness",
+        "answer_relevancy",
+        "context_precision",
+        "context_recall",
+        "citation_correctness",
+    ):
         assert key in m and 0.0 <= m[key] <= 1.0
     assert m["latency_p50"] >= 0.0
     assert report["per_question"][0]["retrieved"] >= 1
@@ -100,7 +119,9 @@ async def test_run_eval_end_to_end(require_db):
 
 
 async def test_run_eval_unknown_dataset_404(client, require_db):
-    resp = await client.post("/api/v1/evals/run", json={"dataset_id": "does-not-exist", "config": {}})
+    resp = await client.post(
+        "/api/v1/evals/run", json={"dataset_id": "does-not-exist", "config": {}}
+    )
     assert resp.status_code == 404
 
 

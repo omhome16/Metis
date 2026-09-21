@@ -8,8 +8,6 @@ are namespaced so they never merge with real vault entities.
 import uuid
 from unittest.mock import patch
 
-from app.graph.store import get_graph_store
-
 NS = f"libtest-{uuid.uuid4().hex[:6]}"
 P1, P2, P3 = f"{NS}-plato", f"{NS}-europe", f"{NS}-aristotle"
 
@@ -31,16 +29,36 @@ async def _seed(store) -> None:
         doc_id=f"lib-doc-a-{uuid.uuid4().hex[:8]}",
         title="Plato's Republic (test)",
         corpus=corpus_a,
-        chunks=[(f"chunk-a1-{uuid.uuid4().hex[:8]}", f"{P1} wrote about justice and the ideal city. {P2} has many traditions.", 0)],
-        entities=[{"name": P1, "type": "Person"}, {"name": P2, "type": "Place"}, {"name": "Justice", "type": "Concept"}],
+        chunks=[
+            (
+                f"chunk-a1-{uuid.uuid4().hex[:8]}",
+                f"{P1} wrote about justice and the ideal city. {P2} has many traditions.",
+                0,
+            )
+        ],
+        entities=[
+            {"name": P1, "type": "Person"},
+            {"name": P2, "type": "Place"},
+            {"name": "Justice", "type": "Concept"},
+        ],
         relations=[],
     )
     await store.upsert_document_graph(
         doc_id=f"lib-doc-b-{uuid.uuid4().hex[:8]}",
         title="Aristotle's Ethics (test)",
         corpus=corpus_b,
-        chunks=[(f"chunk-b1-{uuid.uuid4().hex[:8]}", f"{P3} studied ethics and {P2} spans many countries.", 0)],
-        entities=[{"name": P3, "type": "Person"}, {"name": P2, "type": "Place"}, {"name": "Ethics", "type": "Concept"}],
+        chunks=[
+            (
+                f"chunk-b1-{uuid.uuid4().hex[:8]}",
+                f"{P3} studied ethics and {P2} spans many countries.",
+                0,
+            )
+        ],
+        entities=[
+            {"name": P3, "type": "Person"},
+            {"name": P2, "type": "Place"},
+            {"name": "Ethics", "type": "Concept"},
+        ],
         relations=[],
     )
 
@@ -48,14 +66,20 @@ async def _seed(store) -> None:
 async def test_library_graph_tags_corpora_and_bridges(require_graph):
     store = require_graph
     await _seed(store)
-    data = await store.library_graph(node_limit=2000)  # low-degree test entities must survive the degree cutoff
+    data = await store.library_graph(
+        node_limit=2000
+    )  # low-degree test entities must survive the degree cutoff
     nodes = {n["name"]: n for n in data["nodes"] if n["label"] == "Entity"}
     assert P1 in nodes and nodes[P1]["corpora"] == ["Lib"]
     assert P3 in nodes and nodes[P3]["corpora"] == ["GraphVault"]
-    assert set(nodes[P2]["corpora"]) == {"Lib", "GraphVault"}, "shared entity should span both vaults"
+    assert set(nodes[P2]["corpora"]) == {"Lib", "GraphVault"}, (
+        "shared entity should span both vaults"
+    )
     docs = [n for n in data["nodes"] if n["label"] == "Document"]
     assert any(d["name"] == "Plato's Republic (test)" and d["corpus"] == "Lib" for d in docs)
-    assert any(d["name"] == "Aristotle's Ethics (test)" and d["corpus"] == "GraphVault" for d in docs)
+    assert any(
+        d["name"] == "Aristotle's Ethics (test)" and d["corpus"] == "GraphVault" for d in docs
+    )
 
 
 async def test_journey_finds_cross_vault_path(require_graph):

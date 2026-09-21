@@ -17,6 +17,7 @@ from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
 from app.api.routes.conversations import append_message
 from app.cache import cache_evict_question, cache_lookup, cache_store
+from app.core.auth import CurrentUser, vault_scope_guard
 from app.core.logging import get_logger
 from app.core.tracing import flush_tracer, get_tracer, trace_span
 from app.db.models import Conversation, Feedback, Message
@@ -39,6 +40,8 @@ class AskRequest(BaseModel):
         None, max_length=15_000_000
     )  # ~11MB base64 data URL — multimodal (M4)
     conversation_id: str | None = Field(None, max_length=64)
+    # "Chat with a selection": restrict retrieval to these documents (max 50).
+    document_ids: list[str] | None = Field(None, max_length=50)
     stream: bool = True
     options: dict = Field(default_factory=dict)
 
@@ -58,7 +61,11 @@ async def _cached_events(entry: dict) -> AsyncIterator[ServerSentEvent]:
 
 
 @router.post("/ask")
-async def ask(request: AskRequest, session: AsyncSession = Depends(get_session)):
+async def ask(
+    request: AskRequest,
+    session: AsyncSession = Depends(get_session),
+    user: CurrentUser = None,
+):
     gateway = get_gateway()
     tracer = get_tracer()
 
@@ -81,7 +88,31 @@ async def ask(request: AskRequest, session: AsyncSession = Depends(get_session))
         return EventSourceResponse(fast_stream())
 
     corpus = request.corpus or "default"
+    await vault_scope_guard(session, user, corpus)
     corpus_version = await get_corpus_version(session, corpus)
+
+    # Validate the selection up front: unknown ids silently narrowing retrieval
+    # to nothing would read as "the vault has no answer".
+    doc_ids = request.document_ids or None
+    if doc_ids:
+        from sqlalchemy import select as _select
+
+        from app.db.models import Document as _Document
+
+        owned = (
+            (
+                await session.execute(
+                    _select(_Document.id).where(
+                        _Document.id.in_(doc_ids), _Document.corpus == corpus
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if len(owned) != len(set(doc_ids)):
+            raise HTTPException(status_code=422, detail="one or more documents not in this vault")
+        doc_ids = owned
 
     # Load prior turns for this conversation (last 20) so follow-ups have context.
     history: list[dict] = []
@@ -148,6 +179,7 @@ async def ask(request: AskRequest, session: AsyncSession = Depends(get_session))
                     image=request.image,
                     history=history,
                     lane=lane,
+                    doc_ids=doc_ids,
                 ):
                     if event == "sources":
                         collected["sources"] = data

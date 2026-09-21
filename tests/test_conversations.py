@@ -32,7 +32,11 @@ async def _seed(corpus: str) -> None:
 
 async def _cleanup(corpus: str) -> None:
     async with async_session_factory() as session:
-        convs = (await session.execute(select(Conversation).where(Conversation.vault_name == corpus))).scalars().all()
+        convs = (
+            (await session.execute(select(Conversation).where(Conversation.vault_name == corpus)))
+            .scalars()
+            .all()
+        )
         for c in convs:
             await session.delete(c)
         await session.execute(delete(Document).where(Document.corpus == corpus))
@@ -45,9 +49,9 @@ def _parse_sse(text: str) -> list[tuple[str, dict]]:
         event, data = None, None
         for line in block.split("\n"):
             if line.startswith("event: "):
-                event = line[len("event: "):]
+                event = line[len("event: ") :]
             elif line.startswith("data: "):
-                data = json.loads(line[len("data: "):])
+                data = json.loads(line[len("data: ") :])
         if event is not None:
             events.append((event, data))
     return events
@@ -57,7 +61,9 @@ async def test_conversation_crud(client, require_db):
     corpus = f"test-conv-{uuid.uuid4().hex[:8]}"
     try:
         # create
-        resp = await client.post(f"/api/v1/vaults/{corpus}/conversations", json={"title": "First chat"})
+        resp = await client.post(
+            f"/api/v1/vaults/{corpus}/conversations", json={"title": "First chat"}
+        )
         assert resp.status_code == 201, resp.text
         conv = resp.json()
         assert conv["vault_name"] == corpus
@@ -95,7 +101,9 @@ async def test_ask_persists_conversation(client, require_db):
     await _seed(corpus)
     try:
         with patch("app.api.routes.ask.get_gateway", return_value=FakeGateway()):
-            resp = await client.post("/api/v1/ask", json={"question": "hello world?", "corpus": corpus})
+            resp = await client.post(
+                "/api/v1/ask", json={"question": "hello world?", "corpus": corpus}
+            )
         assert resp.status_code == 200
         events = _parse_sse(resp.text)
         done = dict(events)["done"]
@@ -118,7 +126,8 @@ async def test_ask_persists_conversation(client, require_db):
         # follow-up with conversation_id → history preserved, one exchange appended
         with patch("app.api.routes.ask.get_gateway", return_value=FakeGateway()):
             resp2 = await client.post(
-                "/api/v1/ask", json={"question": "and then?", "corpus": corpus, "conversation_id": conv_id}
+                "/api/v1/ask",
+                json={"question": "and then?", "corpus": corpus, "conversation_id": conv_id},
             )
         assert resp2.status_code == 200
         det2 = await client.get(f"/api/v1/conversations/{conv_id}")

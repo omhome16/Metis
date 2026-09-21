@@ -32,7 +32,12 @@ async def reports(limit: int = 10, session: AsyncSession = Depends(get_session))
     stmt = select(EvalRun).order_by(EvalRun.created_at.desc()).limit(limit)
     rows = (await session.execute(stmt)).scalars().all()
     return [
-        {"run_id": r.id, "config": r.config, "metrics": r.metrics, "created_at": r.created_at.isoformat()}
+        {
+            "run_id": r.id,
+            "config": r.config,
+            "metrics": r.metrics,
+            "created_at": r.created_at.isoformat(),
+        }
         for r in rows
     ]
 
@@ -51,17 +56,14 @@ async def feedback_log(
         ).all()
     )
     rows = (
-        (
-            await session.execute(
-                select(Feedback, Message, Conversation)
-                .join(Message, Message.id == Feedback.message_id)
-                .join(Conversation, Conversation.id == Message.conversation_id)
-                .order_by(Feedback.created_at.desc())
-                .limit(limit)
-            )
+        await session.execute(
+            select(Feedback, Message, Conversation)
+            .join(Message, Message.id == Feedback.message_id)
+            .join(Conversation, Conversation.id == Message.conversation_id)
+            .order_by(Feedback.created_at.desc())
+            .limit(limit)
         )
-        .all()
-    )
+    ).all()
     recent = [
         FeedbackLogRow(
             id=fb.id,

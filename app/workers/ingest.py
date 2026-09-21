@@ -28,9 +28,28 @@ def extract_text(fmt: str, file_path: str) -> str:
     if fmt == "pdf":
         reader = PdfReader(file_path)
         return "\n".join(page.extract_text() or "" for page in reader.pages)
+    if fmt == "epub":
+        return _extract_epub(file_path)
     if fmt in {"md", "txt"}:
         return Path(file_path).read_text(encoding="utf-8", errors="replace")
     return ""
+
+
+def _extract_epub(file_path: str) -> str:
+    """EPUB → plain text: spine order, HTML stripped per chapter, blank-line joins."""
+    from bs4 import BeautifulSoup
+    from ebooklib import ITEM_DOCUMENT, epub
+
+    book = epub.read_epub(file_path)
+    parts: list[str] = []
+    for item in book.get_items_of_type(ITEM_DOCUMENT):
+        soup = BeautifulSoup(item.get_content(), "html.parser")
+        for tag in soup(["script", "style"]):
+            tag.decompose()
+        text = soup.get_text("\n", strip=True)
+        if text.strip():
+            parts.append(text)
+    return "\n\n".join(parts)
 
 
 def _ocr_pdf(file_path: str) -> str:

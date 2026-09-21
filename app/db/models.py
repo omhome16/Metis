@@ -5,7 +5,7 @@ Schema mirrors `docs/architecture.md` §4. Embedding columns use the variable-le
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 try:
     from pgvector.sqlalchemy import HALFVEC as HalfVectorType
@@ -20,7 +20,7 @@ from app.db.base import Base
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _uuid() -> str:
@@ -114,6 +114,18 @@ class EvalRun(Base):
     metrics: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class User(Base):
+    """An account (METIS_AUTH_MODE=users). Vaults are owned, not global."""
+
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(256))
+    display_name: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Vault(Base):
     """A named library of documents (frontend vaults layer)."""
 
@@ -123,6 +135,11 @@ class Vault(Base):
     name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     description: Mapped[str | None] = mapped_column(Text)
     color: Mapped[str | None] = mapped_column(String(32))
+    # Owner (users mode). NULL = orphan from before the first account; the
+    # first registered user adopts orphans so existing libraries survive.
+    owner_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

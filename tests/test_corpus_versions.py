@@ -16,8 +16,10 @@ async def test_bump_and_get(client, require_db):
         assert await bump_corpus_version(s, "vtest") == 2
         assert await get_corpus_version(s, "vtest") == 2
         rows = (
-            await s.execute(select(CorpusVersion).where(CorpusVersion.corpus == "vtest"))
-        ).scalars().all()
+            (await s.execute(select(CorpusVersion).where(CorpusVersion.corpus == "vtest")))
+            .scalars()
+            .all()
+        )
         assert len(rows) == 1
         await s.execute(delete(CorpusVersion).where(CorpusVersion.corpus == "vtest"))
         await s.commit()
@@ -42,9 +44,7 @@ async def test_vault_delete_bumps_version(client, require_db):
     assert r.status_code == 200
     async with async_session_factory() as s:
         version = (
-            await s.execute(
-                select(CorpusVersion.version).where(CorpusVersion.corpus == name)
-            )
+            await s.execute(select(CorpusVersion.version).where(CorpusVersion.corpus == name))
         ).scalar()
     assert version is not None and version >= 1
 
@@ -72,7 +72,9 @@ async def test_ask_response_has_corpus_version_header(client, require_db):
         await store_chunks(s, doc_id, ["Hello world."], embeddings)
         await bump_corpus_version(s, corpus)
 
-    r = await client.post("/api/v1/ask", json={"question": "Who wrote The Art of War?", "corpus": corpus})
+    r = await client.post(
+        "/api/v1/ask", json={"question": "Who wrote The Art of War?", "corpus": corpus}
+    )
     assert r.status_code == 200
     assert "x-metis-corpus-version" in r.headers
 

@@ -4,6 +4,7 @@ from app.db.models import Chunk, Document
 from app.db.session import async_session_factory
 from app.gateway.gateway import LLMGateway
 from app.gateway.mock import MockProvider
+from app.judgment import MockJudgmentClient, NoulAnswer
 from app.rag.contradiction import check_contradiction, parse_citations
 from app.rag.pipeline import contradiction_scan
 from app.rag.retrieval import ChunkHit
@@ -26,6 +27,78 @@ async def test_check_contradiction_mock():
 class ContradictingGateway:
     async def structured(self, task, messages, json_schema):
         return {"contradicts": True, "reason": "claims conflict"}
+
+
+# ── judgment judge: a calibrated Noul instead of a parsed verdict ───────────
+
+
+class RecordingJudgeGateway:
+    """LLM judge that records whether it was reached at all."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def structured(self, task, messages, json_schema):
+        self.calls += 1
+        return {"contradicts": True, "reason": "llm fallback used"}
+
+
+async def _judged(monkeypatch, noul: float, gateway):
+    from app.rag import contradiction as contra
+
+    client = MockJudgmentClient({"contradicts": NoulAnswer(noul=noul)})
+    monkeypatch.setattr(contra, "get_judgment_client", lambda: client)
+    return await check_contradiction(gateway, "Earth is flat.", "Earth is round."), client
+
+
+async def test_contradiction_judgment_flags_a_confident_contradiction(monkeypatch):
+    verdict, client = await _judged(monkeypatch, 0.93, RecordingJudgeGateway())
+    assert verdict["contradicts"] is True
+    assert "0.93" in verdict["reason"]  # Jev has no explanation: the number is the reason
+    assert len(client.calls) == 1
+
+
+async def test_contradiction_judgment_clears_a_confident_agreement(monkeypatch):
+    gateway = RecordingJudgeGateway()
+    verdict, _client = await _judged(monkeypatch, 0.04, gateway)
+    assert verdict["contradicts"] is False
+    assert gateway.calls == 0  # confident judgment → the LLM judge is never asked
+
+
+async def test_ambiguous_judgment_escalates_to_the_llm_judge(monkeypatch):
+    """A Noul near 0.5 is similar probability either way — not a verdict."""
+    gateway = RecordingJudgeGateway()
+    verdict, _client = await _judged(monkeypatch, 0.52, gateway)
+    assert gateway.calls == 1
+    assert verdict["reason"] == "llm fallback used"
+
+
+async def test_contradiction_falls_back_when_no_backend_is_configured(monkeypatch):
+    from app.rag import contradiction as contra
+
+    gateway = RecordingJudgeGateway()
+    monkeypatch.setattr(contra, "get_judgment_client", lambda: None)
+    verdict = await check_contradiction(gateway, "a", "b")
+    assert gateway.calls == 1
+    assert verdict["contradicts"] is True
+
+
+async def test_contradiction_judgment_threshold_is_configurable(monkeypatch):
+    """Policy is code: the same Noul flips verdicts when the threshold moves."""
+    from app.core.config import get_settings
+    from app.rag import contradiction as contra
+
+    # 0.72 clears the uncertain band, so the verdict comes from the threshold
+    # rather than escalating — which is the property under test.
+    client = MockJudgmentClient({"contradicts": NoulAnswer(noul=0.72)})
+    monkeypatch.setattr(contra, "get_judgment_client", lambda: client)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "judgment_contradiction_threshold", 0.5, raising=False)
+    strict = await check_contradiction(RecordingJudgeGateway(), "a", "b")
+    monkeypatch.setattr(settings, "judgment_contradiction_threshold", 0.8, raising=False)
+    lenient = await check_contradiction(RecordingJudgeGateway(), "a", "b")
+    assert strict["contradicts"] is True
+    assert lenient["contradicts"] is False
 
 
 def _hit(cid: str, text: str) -> ChunkHit:

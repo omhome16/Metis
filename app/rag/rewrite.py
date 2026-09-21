@@ -8,7 +8,7 @@ logger = get_logger(__name__)
 REWRITE_PROMPT = (
     "Rewrite the user's question into a more effective search query for retrieval: expand "
     "vague terms into likely domain vocabulary, keep it concise (under 30 words), and do "
-    "not invent facts. Return ONLY JSON: {\"query\": \"...\"}. If the question is already "
+    'not invent facts. Return ONLY JSON: {"query": "..."}. If the question is already '
     "specific, return it unchanged."
 )
 

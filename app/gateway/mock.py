@@ -33,7 +33,9 @@ class MockProvider(LLMClient):
         max_tokens: int = 1024,
     ) -> ChatResult:
         text = f"[mock:{model}] {self._last_user(messages)[:80]}"
-        return ChatResult(text=text, model=model, provider=self.name, usage={"in": 16, "out": len(text)})
+        return ChatResult(
+            text=text, model=model, provider=self.name, usage={"in": 16, "out": len(text)}
+        )
 
     async def chat_stream(
         self,
@@ -50,7 +52,10 @@ class MockProvider(LLMClient):
         prompt = "\n".join(str(m.get("content", "")) for m in messages).lower()
         if "entit" in prompt:  # covers "entity" and "entities"
             return {
-                "entities": [{"name": "Gandhi", "type": "Person"}, {"name": "India", "type": "Place"}],
+                "entities": [
+                    {"name": "Gandhi", "type": "Person"},
+                    {"name": "India", "type": "Place"},
+                ],
                 "relations": [{"source": "Gandhi", "target": "India", "type": "RELATED_TO"}],
             }
         if "rewrite" in prompt:
@@ -59,7 +64,11 @@ class MockProvider(LLMClient):
             return {"contradicts": False, "reason": ""}
         # Judge-style calls used by the eval harness (optimistic lexical defaults).
         if "claims" in prompt:
-            sentences = [s.strip() for s in _SENTENCE_SPLIT.split(self._last_user(messages)) if len(s.strip()) > 3]
+            sentences = [
+                s.strip()
+                for s in _SENTENCE_SPLIT.split(self._last_user(messages))
+                if len(s.strip()) > 3
+            ]
             return {"claims": sentences[:10]}
         if "supported" in prompt:
             return {"supported": True}
@@ -68,10 +77,18 @@ class MockProvider(LLMClient):
         if "present" in prompt:
             return {"present": True}
         if "question" in prompt:
-            return {"questions": ["What is the answer about?", "What does this cover?", "Where is this found?"]}
+            return {
+                "questions": [
+                    "What is the answer about?",
+                    "What does this cover?",
+                    "Where is this found?",
+                ]
+            }
         return {}
 
-    async def describe_image(self, image_b64: str, prompt: str, mime_type: str = "image/png") -> str:
+    async def describe_image(
+        self, image_b64: str, prompt: str, mime_type: str = "image/png"
+    ) -> str:
         return json.dumps(
             {"caption": "A mock description of the uploaded image.", "tags": ["mock", "test"]}
         )

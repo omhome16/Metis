@@ -1,16 +1,33 @@
-"""RAGAS-definition metrics (blueprint §12), computed via the LLM gateway.
+"""RAGAS-definition metrics (blueprint §12), judged by the gateway or a judgment model.
 
 All metric functions take a gateway (duck-typed: `.structured(task, messages, schema)`)
 and optional embed function so unit tests can drive them deterministically with stubs.
+
+Every metric here is a pile of *binary judgments* — is this claim supported, is this
+chunk useful, is this claim present. `_judge_batch` runs them on whichever backend is
+configured:
+
+* the **LLM path** costs one call per item. That is why a free-tier run could exhaust
+  its daily quota mid-matrix and silently fall back to the mock provider, which is what
+  produced the quota-artifact zeros documented in the README.
+* the **judgment path** puts every item in one state and asks all the questions in one
+  request, so a batched metric is a single call. Items that come back ambiguous (~0.5)
+  escalate to the LLM individually rather than guessing.
 """
 
 import re
+from dataclasses import dataclass
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.judgment.base import Noul
+from app.judgment.calibration import ask_quietly, get_judgment_client
 
 logger = get_logger(__name__)
 
-CLAIMS_PROMPT = "Extract the atomic factual claims from the answer. Return ONLY JSON: {\"claims\": [\"...\"]}"
+CLAIMS_PROMPT = (
+    'Extract the atomic factual claims from the answer. Return ONLY JSON: {"claims": ["..."]}'
+)
 SUPPORT_PROMPT = (
     "Decide whether the CLAIM is supported by the provided CONTEXT. "
     'Return ONLY JSON: {"supported": true|false}'
@@ -26,6 +43,44 @@ USEFULNESS_PROMPT = (
 PRESENT_PROMPT = (
     "Decide whether the context contains the information expressed in the CLAIM. "
     'Return ONLY JSON: {"present": true|false}'
+)
+
+
+@dataclass(frozen=True)
+class JudgeSpec:
+    """One binary judgment, defined once so both backends ask the same question.
+
+    `prompt`/`key` drive the LLM path unchanged; `instructions` plus the true/false
+    criteria drive the judgment path.
+    """
+
+    prompt: str
+    key: str
+    instructions: str
+    true_description: str
+    false_description: str
+
+
+SUPPORT = JudgeSpec(
+    prompt=SUPPORT_PROMPT,
+    key="supported",
+    instructions="Is the CLAIM supported by the CONTEXT?",
+    true_description="The context states the claim, or directly implies that it is true.",
+    false_description="The context contradicts the claim, or says nothing about it.",
+)
+USEFULNESS = JudgeSpec(
+    prompt=USEFULNESS_PROMPT,
+    key="useful",
+    instructions="Is the CONTEXT useful for answering the QUESTION?",
+    true_description="The context contains information that helps answer the question.",
+    false_description="The context does not help answer the question.",
+)
+PRESENCE = JudgeSpec(
+    prompt=PRESENT_PROMPT,
+    key="present",
+    instructions="Does the CONTEXT contain the information expressed in the CLAIM?",
+    true_description="The context contains that information.",
+    false_description="The context does not contain that information.",
 )
 
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
@@ -55,6 +110,52 @@ async def _judge_bool(gateway, prompt: str, extra: str, key: str) -> bool:
         return False
 
 
+async def _judge_batch(gateway, spec: JudgeSpec, extras: list[str]) -> list[bool]:
+    """Judge every item, as one request when a judgment backend is available."""
+    if not extras:
+        return []
+    judged = await _judge_batch_by_judgment(spec, extras)
+    if judged is None:
+        return [await _judge_bool(gateway, spec.prompt, extra, spec.key) for extra in extras]
+    # Ambiguous items fall back to the LLM one at a time; decided ones are kept.
+    return [
+        value if value is not None else await _judge_bool(gateway, spec.prompt, extras[i], spec.key)
+        for i, value in enumerate(judged)
+    ]
+
+
+async def _judge_batch_by_judgment(spec: JudgeSpec, extras: list[str]) -> list[bool | None] | None:
+    """One batched judgment call, or None to use the LLM path.
+
+    None per item means that item was ambiguous and should escalate.
+    """
+    client = get_judgment_client()
+    if client is None:
+        return None
+    band = get_settings().judgment_noul_uncertain_band
+    names = [f"item_{i}" for i in range(len(extras))]
+    questions = {
+        name: Noul(
+            # Backticked path into the shared state, per System One's state syntax.
+            instructions=f"{spec.instructions} The CLAIM and CONTEXT to judge are `items.{name}`.",
+            true_description=spec.true_description,
+            false_description=spec.false_description,
+        )
+        for name in names
+    }
+    state = {"items": dict(zip(names, extras, strict=True))}
+    result = await ask_quietly(client, state, questions)
+    if result is None:
+        return None
+    out: list[bool | None] = []
+    for name in names:
+        noul = result.noul(name)
+        if noul is None:
+            return None  # a missing answer means the batch as a whole is unusable
+        out.append(None if abs(noul - 0.5) < band else noul >= 0.5)
+    return out
+
+
 async def faithfulness(gateway, answer: str, contexts: list[str]) -> float:
     """Fraction of answer claims supported by the context (RAGAS Faithfulness)."""
     if not answer.strip():
@@ -78,11 +179,10 @@ async def faithfulness(gateway, answer: str, contexts: list[str]) -> float:
     if not claims:
         return 1.0
     context_blob = "\n\n".join(contexts)[:6000]
-    supported = 0
-    for c in claims:
-        if await _judge_bool(gateway, SUPPORT_PROMPT, f"CONTEXT:\n{context_blob}\n\nCLAIM:\n{c}", "supported"):
-            supported += 1
-    return round(supported / len(claims), 4)
+    supported = await _judge_batch(
+        gateway, SUPPORT, [f"CONTEXT:\n{context_blob}\n\nCLAIM:\n{c}" for c in claims]
+    )
+    return round(sum(supported) / len(claims), 4)
 
 
 async def answer_relevancy(gateway, question: str, answer: str, embed) -> float:
@@ -117,10 +217,11 @@ async def context_precision(gateway, question: str, contexts: list[str]) -> floa
     """RAGAS ContextPrecision: average precision over the ranked context chunks."""
     if not contexts:
         return 0.0
-    useful = [
-        await _judge_bool(gateway, USEFULNESS_PROMPT, f"QUESTION:\n{question}\n\nCONTEXT:\n{c[:1500]}", "useful")
-        for c in contexts
-    ]
+    useful = await _judge_batch(
+        gateway,
+        USEFULNESS,
+        [f"QUESTION:\n{question}\n\nCONTEXT:\n{c[:1500]}" for c in contexts],
+    )
     numerator, denominator = 0.0, 0
     for k, is_useful in enumerate(useful, start=1):
         if is_useful:
@@ -136,11 +237,10 @@ async def context_recall(gateway, ground_truth: str, contexts: list[str]) -> flo
     if not claims:
         return 0.0
     context_blob = "\n\n".join(contexts)[:6000]
-    present = 0
-    for c in claims:
-        if await _judge_bool(gateway, PRESENT_PROMPT, f"CONTEXT:\n{context_blob}\n\nCLAIM:\n{c}", "present"):
-            present += 1
-    return round(present / len(claims), 4)
+    present = await _judge_batch(
+        gateway, PRESENCE, [f"CONTEXT:\n{context_blob}\n\nCLAIM:\n{c}" for c in claims]
+    )
+    return round(sum(present) / len(claims), 4)
 
 
 _CITE_RE = re.compile(r"\[(\d{1,3}(?:\s*,\s*\d{1,3})*)\]")
@@ -166,7 +266,7 @@ def citation_correctness(answer: str, context_ids: list[str]) -> tuple[float, di
 def _cosine(a: list[float], b: list[float]) -> float:
     if len(a) != len(b):
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))  # lengths checked above
     na = sum(x * x for x in a) ** 0.5 or 1.0
     nb = sum(y * y for y in b) ** 0.5 or 1.0
     return dot / (na * nb)

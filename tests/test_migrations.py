@@ -17,9 +17,7 @@ async def test_halfvec_columns_and_indexes(client, require_db):
         ).scalar()
         assert hnsw == 2
         row = (
-            await conn.execute(
-                text("SELECT version FROM corpus_versions WHERE corpus='smoke'")
-            )
+            await conn.execute(text("SELECT version FROM corpus_versions WHERE corpus='smoke'"))
         ).scalar_one_or_none()
         assert row is None
         cols = set(

@@ -93,7 +93,9 @@ class LLMClient(ABC):
     async def structured(self, messages: list[dict], model: str, json_schema: dict) -> dict:
         """JSON-mode completion (for entity extraction, judging, rewriting)."""
 
-    async def describe_image(self, image_b64: str, prompt: str, mime_type: str = "image/png") -> str:
+    async def describe_image(
+        self, image_b64: str, prompt: str, mime_type: str = "image/png"
+    ) -> str:
         raise NotImplementedError(f"{self.name} does not support vision")
 
     async def chat_tools_stream(

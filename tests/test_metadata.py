@@ -7,8 +7,17 @@ from sqlalchemy import delete, select
 
 from app.db.models import Chunk, Document
 from app.db.session import async_session_factory
+from app.judgment import ChoiceAnswer, MockJudgmentClient
+from app.rag import metadata as md
 from app.rag.embeddings import get_embedder
-from app.rag.metadata import _clean, extract_query_metadata, parse_metadata_json
+from app.rag.metadata import (
+    _clean,
+    _scope_by_selection,
+    corpus_scoping_candidates,
+    extract_query_metadata,
+    parse_metadata_json,
+    scoped_query_metadata,
+)
 from app.rag.retrieval import keyword_search, store_chunks, vector_search
 
 
@@ -121,6 +130,100 @@ async def test_extract_query_metadata_empty_result():
     assert meta == {}
 
 
+# ── selection path: options come from the corpus, never from the model ──────
+
+CANDIDATES = {"tags": ["policy", "code"], "authors": ["Jane Adams"], "years": [2024]}
+
+
+def _selection_client(**choices) -> MockJudgmentClient:
+    return MockJudgmentClient(
+        {name: ChoiceAnswer(choice=value, confidence=0.9) for name, value in choices.items()}
+    )
+
+
+async def test_selection_can_only_offer_values_the_corpus_holds(monkeypatch):
+    """The whole point: an invented tag is not merely rejected, it is unreachable."""
+    client = _selection_client(tag="policy", author="none", year="none")
+    monkeypatch.setattr(md, "get_judgment_client", lambda: client)
+    meta = await _scope_by_selection("the privacy policy", CANDIDATES)
+    assert meta == {"tags": ["policy"]}
+    _state, questions = client.calls[0]
+    assert set(questions["tag"].criteria) == {"policy", "code", "none"}
+    assert set(questions["author"].criteria) == {"Jane Adams", "none"}
+    assert set(questions["year"].criteria) == {"2024", "none"}
+
+
+async def test_selection_maps_a_chosen_year_to_a_date_range(monkeypatch):
+    client = _selection_client(tag="none", author="Jane Adams", year="2024")
+    monkeypatch.setattr(md, "get_judgment_client", lambda: client)
+    meta = await _scope_by_selection("what did Adams write in 2024?", CANDIDATES)
+    assert meta == {
+        "author": "Jane Adams",
+        "date_from": "2024-01-01",
+        "date_to": "2024-12-31",
+    }
+
+
+async def test_selection_of_none_everywhere_filters_nothing(monkeypatch):
+    client = _selection_client(tag="none", author="none", year="none")
+    monkeypatch.setattr(md, "get_judgment_client", lambda: client)
+    assert await _scope_by_selection("what is fastapi?", CANDIDATES) == {}
+
+
+async def test_selection_asks_one_batched_request(monkeypatch):
+    """All dimensions ride in a single call — System One evaluates them in parallel."""
+    client = _selection_client(tag="none", author="none", year="none")
+    monkeypatch.setattr(md, "get_judgment_client", lambda: client)
+    await _scope_by_selection("q", CANDIDATES)
+    assert len(client.calls) == 1
+    assert set(client.calls[0][1]) == {"tag", "author", "year"}
+
+
+async def test_selection_returns_none_without_a_judgment_backend(monkeypatch):
+    monkeypatch.setattr(md, "get_judgment_client", lambda: None)
+    assert await _scope_by_selection("q", CANDIDATES) is None
+
+
+async def test_selection_skips_an_empty_candidate_set(monkeypatch):
+    client = _selection_client(tag="policy")
+    monkeypatch.setattr(md, "get_judgment_client", lambda: client)
+    assert await _scope_by_selection("q", {"tags": [], "authors": [], "years": []}) is None
+    assert client.calls == []
+
+
+async def test_scoped_metadata_falls_back_to_llm_without_a_session(monkeypatch):
+    monkeypatch.setattr(md, "get_judgment_client", lambda: _selection_client(tag="policy"))
+    gateway = _StructuredGateway({"tags": ["policy"], "author": "Adams"})
+    meta = await scoped_query_metadata(gateway, "the policy by Adams")
+    assert meta == {"tags": ["policy"], "author": "Adams"}
+
+
+async def test_scoped_metadata_falls_back_when_the_corpus_has_no_candidates(monkeypatch):
+    """Nothing to select from → the original LLM extractor still runs."""
+    client = _selection_client(tag="policy")
+    monkeypatch.setattr(md, "get_judgment_client", lambda: client)
+
+    async def _empty(session, corpus):
+        return {"tags": [], "authors": [], "years": []}
+
+    monkeypatch.setattr(md, "corpus_scoping_candidates", _empty)
+    gateway = _StructuredGateway({"tags": ["policy"]})
+    meta = await scoped_query_metadata(gateway, "the policy", session=object(), corpus="c")
+    assert meta == {"tags": ["policy"]}
+    assert client.calls == []
+
+
+async def test_corpus_scoping_candidates_reads_real_values(require_db):
+    corpus = f"test-scope-{uuid.uuid4().hex[:8]}"
+    await _seed_two_docs(corpus)
+    async with async_session_factory() as session:
+        candidates = await corpus_scoping_candidates(session, corpus)
+    assert set(candidates["tags"]) == {"policy", "privacy", "code", "fastapi"}
+    assert set(candidates["authors"]) == {"Jane Adams", "Bob"}
+    assert candidates["years"] == [2024]
+    await _cleanup(corpus)
+
+
 async def test_vector_search_meta_tag_filter(require_db):
     corpus = f"test-meta-{uuid.uuid4().hex[:8]}"
     await _seed_two_docs(corpus)
@@ -205,9 +308,7 @@ async def test_pipeline_drops_invented_tag_filter(require_db):
         await session.commit()
         embeddings = await embedder.embed_texts([doc.raw_text or ""])
         await store_chunks(session, doc.id, [doc.raw_text or ""], embeddings)
-    gateway = _StructuredGateway(
-        {"tags": ["fastapi", "database", "management", "system"]}
-    )
+    gateway = _StructuredGateway({"tags": ["fastapi", "database", "management", "system"]})
     async with async_session_factory() as session:
         hits, _rewritten, meta = await retrieve_context(
             session,

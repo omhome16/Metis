@@ -27,6 +27,9 @@ torch_cache/
 # Learning docs (personal study material)
 learning doc/
 
+# Interactive dissection site (local study build, heavy generated assets)
+metis-dissection/
+
 # OS / IDE
 .DS_Store
 Thumbs.db

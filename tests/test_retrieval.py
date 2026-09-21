@@ -10,7 +10,11 @@ from app.rag.retrieval import store_chunks, vector_search
 
 async def _cleanup(corpus: str) -> None:
     async with async_session_factory() as session:
-        await session.execute(delete(Chunk).where(Chunk.doc_id.in_(select(Document.id).where(Document.corpus == corpus))))
+        await session.execute(
+            delete(Chunk).where(
+                Chunk.doc_id.in_(select(Document.id).where(Document.corpus == corpus))
+            )
+        )
         await session.execute(delete(Document).where(Document.corpus == corpus))
         await session.commit()
 
@@ -29,8 +33,15 @@ async def test_store_and_search(require_db):
         )
         session.add(doc)
         await session.commit()
-        embeddings = await embedder.embed_texts(["the quick brown fox jumps", "completely unrelated sentence"])
-        await store_chunks(session, doc.id, ["the quick brown fox jumps", "completely unrelated sentence"], embeddings)
+        embeddings = await embedder.embed_texts(
+            ["the quick brown fox jumps", "completely unrelated sentence"]
+        )
+        await store_chunks(
+            session,
+            doc.id,
+            ["the quick brown fox jumps", "completely unrelated sentence"],
+            embeddings,
+        )
 
     async with async_session_factory() as session:
         qvec = await embedder.embed_query("the quick brown fox")

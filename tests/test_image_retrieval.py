@@ -15,7 +15,11 @@ _PNG = bytes.fromhex(
 
 async def _cleanup(corpus: str) -> None:
     async with async_session_factory() as session:
-        await session.execute(delete(ImageRecord).where(ImageRecord.doc_id.in_(select(Document.id).where(Document.corpus == corpus))))
+        await session.execute(
+            delete(ImageRecord).where(
+                ImageRecord.doc_id.in_(select(Document.id).where(Document.corpus == corpus))
+            )
+        )
         await session.execute(delete(Document).where(Document.corpus == corpus))
         await session.commit()
 
@@ -34,7 +38,9 @@ async def test_store_and_search_images(require_db):
         session.add(doc)
         await session.commit()
         emb = await embedder.embed_image(_PNG, "image/png")
-        await store_image(session, doc.id, "uploads/x/sunset.png", "A red sunset over the sea.", ["sunset"], emb)
+        await store_image(
+            session, doc.id, "uploads/x/sunset.png", "A red sunset over the sea.", ["sunset"], emb
+        )
 
     async with async_session_factory() as session:
         qvec = await embedder.embed_image(_PNG, "image/png")

@@ -1,7 +1,7 @@
+import uuid
 from unittest.mock import patch
 
 import pytest
-import uuid
 
 from app.api.routes import health as health_module
 

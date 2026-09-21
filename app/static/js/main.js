@@ -1,20 +1,23 @@
 import { initTheme, toggleTheme, currentTheme } from "./theme.js";
 import { icon } from "./icons.js";
-import { api } from "./api.js";
+import { api, jwt, apiToken } from "./api.js";
 import { state } from "./store.js";
 import { parseHash, vaultPath } from "./router.js";
-import { renderSidebar, openCreateVault } from "./views/sidebar.js";
+import { renderSidebar } from "./views/sidebar.js";
+import { renderAuth } from "./views/auth.js";
 import { renderHome } from "./views/home.js";
 import { renderDocuments } from "./views/documents.js";
 import { renderGraph } from "./views/graphview.js";
 import { renderAsk } from "./views/ask.js";
+import { renderContradictions } from "./views/contradictions.js";
 import { renderLibrary } from "./views/library.js";
 import { renderSettings } from "./views/settings.js";
+
+let authKnown = false; // have we resolved the auth probe?
 
 async function boot() {
   initTheme();
 
-  // brand + topbar
   document.getElementById("brandMark").innerHTML = icon("mark", 22);
   const themeBtn = document.getElementById("themeToggle");
   const paintThemeIcon = () => {
@@ -25,64 +28,33 @@ async function boot() {
   document.addEventListener("metis:theme", paintThemeIcon);
 
   document.getElementById("newVaultBtn").innerHTML = icon("plus", 15);
-  document.getElementById("newVaultBtn").addEventListener("click", () =>
-    openCreateVault(() => { location.hash = "#/"; })
-  );
-
-  await refreshVaults();
-  initStatusbar();
-
-  const render = async () => {
-    const route = parseHash();
-    const view = document.getElementById("view");
-    paintTopbar(route);
-
-    if (route.name === "home") {
-      await renderHome(view);
-      return;
-    }
-
-    if (route.name === "library") {
-      await renderLibrary(view, route.tab);
-      return;
-    }
-
-    if (route.name === "settings") {
-      await renderSettings(view);
-      return;
-    }
-
-    let vault = state.vaults.find((v) => v.name === route.vault);
-    if (!vault) {
-      try {
-        vault = await api.vaultDetail(route.vault);
-        state.vaults.push(vault);
-        state.vaults.sort((a, b) => a.name.localeCompare(b.name));
-        renderSidebar();
-      } catch {
-        location.hash = "#/";
-        return;
-      }
-    }
-    state.current = vault;
-
-    if (route.tab === "graph") await renderGraph(view, vault);
-    else if (route.tab === "ask") await renderAsk(view, vault);
-    else await renderDocuments(view, vault);
-  };
-
-  window.addEventListener("hashchange", render);
-
-  // A document node clicked in the graph jumps to the vault's document library.
-  window.addEventListener("metis:open-doc", () => {
-    if (state.current && parseHash().name === "vault") {
-      const route = parseHash();
-      if (route.tab !== "documents") location.hash = vaultPath(route.vault, "documents");
-    }
+  document.getElementById("newVaultBtn").addEventListener("click", async () => {
+    const { openCreateVault } = await import("./views/sidebar.js");
+    openCreateVault(() => { location.hash = "#/"; });
   });
 
-  // No hash → land on the overview so all vaults are visible first.
+  // Resolve the session before painting anything user-owned.
+  if (jwt() || apiToken()) {
+    try {
+      state.user = await api.me();
+    } catch {
+      state.user = null;
+    }
+  }
+
+  window.addEventListener("metis:auth-required", () => {
+    authKnown = true;
+    renderAuth(document.getElementById("view"));
+  });
+
+  window.addEventListener("hashchange", render);
   await render();
+
+  if (!state.needsAuth) {
+    await refreshVaults();
+    initStatusbar();
+  }
+  authKnown = true;
 }
 
 async function refreshVaults() {
@@ -94,9 +66,67 @@ async function refreshVaults() {
   renderSidebar();
 }
 
+async function render() {
+  const route = parseHash();
+  const view = document.getElementById("view");
+  paintTopbar(route);
+
+  // users mode with no session: everything becomes the auth screen.
+  if (!authKnown || state.needsAuth || route.name === "login") {
+    try {
+      state.user = await api.me();
+      state.needsAuth = false;
+      document.body.classList.remove("authing");
+    } catch {
+      renderAuth(view);
+      return;
+    }
+  } else {
+    document.body.classList.remove("authing");
+  }
+
+  if (route.name === "login") {
+    location.hash = "#/";
+    return;
+  }
+  if (route.name === "home") {
+    await renderHome(view);
+    return;
+  }
+  if (route.name === "library") {
+    await renderLibrary(view, route.tab);
+    return;
+  }
+  if (route.name === "settings") {
+    await renderSettings(view);
+    return;
+  }
+
+  let vault = state.vaults.find((v) => v.name === route.vault);
+  if (!vault) {
+    try {
+      vault = await api.vaultDetail(route.vault);
+      state.vaults.push(vault);
+      state.vaults.sort((a, b) => a.name.localeCompare(b.name));
+      renderSidebar();
+    } catch {
+      location.hash = "#/";
+      return;
+    }
+  }
+  state.current = vault;
+
+  if (route.tab === "graph") await renderGraph(view, vault);
+  else if (route.tab === "ask") await renderAsk(view, vault);
+  else if (route.tab === "contradictions") await renderContradictions(view, vault);
+  else await renderDocuments(view, vault);
+}
+
 function paintTopbar(route) {
   const ctx = document.getElementById("topbarContext");
   ctx.innerHTML = "";
+  if (document.body.classList.contains("authing")) return;
+
   if (route.name === "home") {
     ctx.append(crumb("Overview", true));
   } else if (route.name === "settings") {
@@ -147,7 +177,7 @@ function initStatusbar() {
     cache: document.querySelector('[data-svc="cache"]'),
     model: document.querySelector('[data-svc="model"]'),
   };
-  chips.model.querySelector(".chip-label").textContent = "model · bge-m3 / bge-reranker / clip";
+  chips.model.querySelector(".chip-label").textContent = "model · bge-m3 / reranker";
 
   const setState = (key, ok) => {
     chips[key].classList.remove("ok", "down");
@@ -162,7 +192,6 @@ function initStatusbar() {
       setState("graph", h.services?.graph === "up");
       const stats = await api.cacheStats().catch(() => null);
       if (stats) {
-        const q = (stats.hits || 0) + (stats.misses || 0);
         chips.cache.querySelector(".chip-label").textContent = `cache ${stats.entries ?? 0}e`;
         setState("cache", true);
       } else {

@@ -9,12 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-# Windows' mimetypes registry lacks .woff2 — register so @font-face loads.
-mimetypes.add_type("font/woff2", ".woff2")
-mimetypes.add_type("font/woff", ".woff")
-
 from app.api.routes import (
     ask,
+    auth,
     cache,
     conversations,
     corpora,
@@ -22,18 +19,29 @@ from app.api.routes import (
     evals,
     graph,
     health,
+    imports,
     ingest,
     library,
+    notes,
+    reports,
     search,
-    settings as settings_routes,
     vaults,
+)
+from app.api.routes import (
+    settings as settings_routes,
 )
 from app.core.config import settings
 from app.core.errors import register_exception_handlers
 from app.core.limits import RateLimiter, RateLimitMiddleware
 from app.core.logging import get_logger, setup_logging
+from app.core.security import ApiTokenMiddleware, SecurityHeadersMiddleware
 from app.db.session import engine
 from app.graph.store import get_graph_store
+
+# Windows' mimetypes registry lacks .woff2/.woff — register so @font-face loads.
+# Done after the imports (not between them) so the module stays import-clean.
+mimetypes.add_type("font/woff2", ".woff2")
+mimetypes.add_type("font/woff", ".woff")
 
 logger = get_logger("app")
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -59,10 +67,21 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 
-# CORS is added last → outermost, so its headers are present even on 429s.
+# Middleware runs in reverse registration order: CORS (outermost) → security
+# headers → rate limit → token gate → routes. So even a 401 or 429 carries the
+# CORS and security headers, and the limiter sees abusive traffic before the
+# token comparison runs.
 app.add_middleware(
-    RateLimitMiddleware, limiter=RateLimiter(settings.rate_limit_max, settings.rate_limit_window)
+    ApiTokenMiddleware,
+    token=settings.api_token,
+    auth_mode=settings.auth_mode,
 )
+app.add_middleware(
+    RateLimitMiddleware,
+    limiter=RateLimiter(settings.rate_limit_max, settings.rate_limit_window),
+    trust_proxy_headers=settings.trust_proxy_headers,
+)
+app.add_middleware(SecurityHeadersMiddleware, hsts=settings.env == "prod")
 # allow_credentials is only valid with explicit origins — skip it for the wildcard dev default.
 app.add_middleware(
     CORSMiddleware,
@@ -74,6 +93,7 @@ app.add_middleware(
 register_exception_handlers(app)
 
 app.include_router(health.router)
+app.include_router(auth.router, prefix=settings.api_prefix)
 app.include_router(ingest.router, prefix=settings.api_prefix)
 app.include_router(corpora.router, prefix=settings.api_prefix)
 app.include_router(ask.router, prefix=settings.api_prefix)
@@ -85,6 +105,9 @@ app.include_router(vaults.router, prefix=settings.api_prefix)
 app.include_router(conversations.router, prefix=settings.api_prefix)
 app.include_router(library.router, prefix=settings.api_prefix)
 app.include_router(documents.router, prefix=settings.api_prefix)
+app.include_router(imports.router, prefix=settings.api_prefix)
+app.include_router(notes.router, prefix=settings.api_prefix)
+app.include_router(reports.router, prefix=settings.api_prefix)
 app.include_router(settings_routes.router, prefix=settings.api_prefix)
 
 # Static frontend (SPA) — API routes above always win; unknown API paths 404.

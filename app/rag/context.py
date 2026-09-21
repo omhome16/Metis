@@ -6,7 +6,6 @@ dedup, ordering and grounding land with the M5 phase.
 
 from dataclasses import dataclass
 
-from app.core.config import Settings, get_settings
 from app.rag.chunking import count_tokens
 from app.rag.retrieval import ChunkHit
 
@@ -32,10 +31,8 @@ class AssembledContext:
 def assemble_context(
     question: str,
     hits: list[ChunkHit],
-    settings: Settings | None = None,
     image_captions: list[dict] | None = None,
 ) -> AssembledContext:
-    s = settings or get_settings()
     blocks: list[str] = []
     citations: list[dict] = []
     tokens_used = 0
@@ -69,4 +66,6 @@ def assemble_context(
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
     ]
-    return AssembledContext(messages=messages, citations=citations, tokens_used=tokens_used, user_text=user_content)
+    return AssembledContext(
+        messages=messages, citations=citations, tokens_used=tokens_used, user_text=user_content
+    )

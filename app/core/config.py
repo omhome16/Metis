@@ -29,8 +29,10 @@ class Settings(BaseSettings):
 
     # ── LLM gateway ────────────────────────────────────────────────────────
     # NOTE: GROQ_API_KEY / GEMINI_API_KEY use their canonical unprefixed names.
+    # TYPESAFE_API_KEY likewise uses its canonical unprefixed name.
     groq_api_key: str = Field(default="", validation_alias="GROQ_API_KEY")
     gemini_api_key: str = Field(default="", validation_alias="GEMINI_API_KEY")
+    typesafe_api_key: str = Field(default="", validation_alias="TYPESAFE_API_KEY")
     groq_base_url: str = "https://api.groq.com/openai/v1"
     gemini_openai_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
     primary_provider: str = "groq"  # groq | gemini
@@ -80,6 +82,8 @@ class Settings(BaseSettings):
     cache_max_len_ratio: float = 1.5
     query_rewrite: bool = True
     rerank_enabled: bool = True
+    # cross-encoder (default, local+free) | typesafe (compare, don't presume)
+    rerank_backend: str = "cross-encoder"
 
     # ── Parent-child chunking (P3.1) ───────────────────────────────────────
     # true: children (~child_size) are embedded and searched; context blocks
@@ -98,12 +102,21 @@ class Settings(BaseSettings):
     # true: heuristic lane decision is optionally refined by one LLM call
     # (task "router"); any failure keeps the heuristic result. false: heuristic only.
     router_llm: bool = False
+    # heuristic (default) | llm | judgment — the last one routes by Choice.
+    # Kept opt-in: the heuristic router is synchronous, free and never raises,
+    # so a network hop per question has to earn its place on your own data.
+    router_backend: str = "heuristic"
 
     # ── Global sensemaking (P5) ─────────────────────────────────────────────
     # top-k communities whose summaries feed a deep-lane "global" answer.
     global_relevance_budget: int = 8
 
-    # ── OCR (P6) ────────────────────────────────────────────────────────────
+    # ── Ingestion ───────────────────────────────────────────────────────────
+    # Where raw uploads are stored. Absolute path in prod (ephemeral or
+    # cwd-dependent relative paths break multi-process deployments).
+    upload_dir: str = "uploads"
+
+    # ── OCR (P6) ──────────────────────────────────────────────────────
     # "pytesseract": OCR PDFs with zero extracted text (tesseract binary
     # required, rasterized locally). "" (default): zero-text PDFs are marked
     # `extraction_status=empty` + ingest warning — never silent.
@@ -129,6 +142,19 @@ class Settings(BaseSettings):
     hnsw_ef_search: int = 120
     hnsw_iterative_scan: str = "relaxed_order"  # off | relaxed_order | strict_order
 
+    # ── Judgment layer (TypeSafe System One / Jev) ───────────────────────
+    # Metis *generates* with app/gateway and *decides* with a judgment model.
+    # Jev returns typed answers + calibrated probabilities instead of text, so
+    # the tasks below threshold in code. Input $0.042/Mtok, output free.
+    # backend: llm (default, pre-existing LLM judges) | typesafe | mock | off.
+    # Docs: https://docs.typesafe.ai ; key: https://console.typesafe.ai
+    judgment_backend: str = "llm"
+    typesafe_model: str = "jev-latest"
+    # A Noul within this distance of 0.5 reads as "similar either way", not
+    # "medium intensity", so it escalates to the LLM judge instead of acting.
+    judgment_noul_uncertain_band: float = 0.15
+    judgment_contradiction_threshold: float = 0.5
+
     # ── Observability / limits ─────────────────────────────────────────────
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
@@ -140,7 +166,19 @@ class Settings(BaseSettings):
     # Set METIS_CORS_ORIGINS (comma-separated) in prod; dev default allows all.
     cors_origins: list[str] = ["*"]
 
-    @field_validator("groq_api_key", "gemini_api_key", mode="before")
+    # ── Access control (see app/core/security.py, app/core/auth.py) ────────
+    # auth_mode: "users" (accounts + per-user vaults; default) | "token"
+    # (shared-secret gate for scripts/evals) | "none" (localhost dev).
+    auth_mode: str = "users"
+    # JWT signing key for users mode. CHANGE THIS in any shared deployment.
+    secret_key: str = "metis-dev-secret-change-me-now-32-bytes+"
+    # Legacy shared-secret gate (used when auth_mode="token"). Empty = open.
+    api_token: str = ""
+    # Trust `X-Forwarded-For` for rate-limit bucketing. Only enable behind a
+    # proxy that overwrites the header, or clients can forge their own bucket.
+    trust_proxy_headers: bool = False
+
+    @field_validator("groq_api_key", "gemini_api_key", "typesafe_api_key", mode="before")
     @classmethod
     def _trim_api_keys(cls, v):
         """Treat whitespace-only values (e.g. `KEY=   # comment`) as unset."""
