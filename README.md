@@ -15,8 +15,8 @@
 
 ## Features (what a user actually gets)
 
-- **Accounts & private vaults** — register, sign in, and every vault/document/chat is scoped to your account (`METIS_AUTH_MODE=users` by default; `token`/`none` for scripts and localhost).
-- **Ingest anything** — PDF, EPUB (books!), Markdown, plain text, images (CLIP + vision captions); drag-drop with live indexing progress.
+- **Accounts & private vaults** — register, sign in, and every vault/document/chat is scoped to your account (`METIS_AUTH_MODE=users` by default; `token`/`none` for scripts and localhost). The first account adopts pre-accounts vaults.
+- **Ingest anything** — PDF, EPUB (books!), Markdown, plain text, images (CLIP + vision captions); drag-drop with live indexing progress. Content-hash dedup makes re-uploads idempotent.
 - **Import connectors** — a web article by URL, your **Readwise** book highlights, or your **Zotero** library (per-request credentials, never stored).
 - **Grounded chat** — streaming answers with numbered citations, per-source score cards, an agent mode that shows its tool calls, and a **document picker** to restrict any answer to a selection ("only compare these three papers").
 - **Knowledge graph** — entities and relations extracted at ingest, communities detected and summarized, and an **interactive explorer**: click an entity, see its neighborhood, jump into a chat about it.
@@ -38,29 +38,103 @@ Two pipelines: **ingest** (documents → chunks + knowledge graph) and **ask**
 (question → cited answer). Postgres+pgvector is the source of truth, Redis is the job
 queue, Neo4j holds the graph. Everything is async — the ask path streams over SSE.
 
+### System overview
+
 ```mermaid
-flowchart LR
-    U[User question] --> R[Semantic router<br/>fast / standard / deep]
-    R -->|fast| CHAT[Greet / chit-chat<br/>no retrieval]
-    R -->|standard / deep| CACHE[(Semantic cache<br/>Postgres, cosine >= 0.92<br/>+ near-duplicate guard)]
-    CACHE -->|hit| GEN2[Replay cached answer<br/>cached: true]
-    CACHE -->|miss|    RW[Query rewrite +<br/>filter selection<br/>Jev Choice or LLM]
-    RW --> HY[Hybrid retrieval<br/>pgvector + FTS, RRF fusion]
-    HY --> GB[Graph boost<br/>entity neighbor chunks]
-    GB --> RR[Cross-encoder rerank<br/>bge-reranker-base]
-    RR --> PA[Parent expansion<br/>small-to-big context]
-    PA --> CTX[assemble_context<br/>numbered sources]
-    CTX --> GEN[Generation / ReAct agent]
-    GEN -->    CC[Contradiction scan<br/>embedding band 0.70-0.95<br/>Jev Noul or LLM judge]
-    CC --> SSE[SSE stream<br/>sources, thinking, tokens, citations, done]
-    SSE --> CACHE2[(cache_store)]
+flowchart TB
+    subgraph Client
+        SPA[Vanilla-JS SPA<br/>served at / by FastAPI<br/>no build step]
+    end
+
+    subgraph API[FastAPI app.main:app]
+        AUTH[Auth gate<br/>users JWT / token / none]
+        R[API routers<br/>app/api/routes/*<br/>mounted under /api/v1]
+        SSE[SSE streams<br/>ask + ingest progress]
+        SEC[Security headers<br/>rate limit<br/>error handlers]
+    end
+
+    subgraph RAG[app/rag — ask pipeline]
+        RT[Semantic router<br/>fast / standard / deep]
+        CACHE_CHECK[Semantic cache check<br/>Postgres cosine >= 0.92<br/>+ near-duplicate guard]
+        RW[Query rewrite +<br/>filter selection]
+        HY[Hybrid retrieval<br/>pgvector + FTS<br/>RRF fusion]
+        GB[Graph boost<br/>entity neighbor chunks]
+        RR[Cross-encoder rerank<br/>bge-reranker-base]
+        PA[Parent expansion<br/>small-to-big context]
+        CTX[assemble_context<br/>numbered sources]
+        AG[ReAct agent<br/>search_vault / graph_lookup]
+        CON[Contradiction scan<br/>band 0.70-0.95]
+        GEN[Generation]
+    end
+
+    subgraph ING[app/workers — ingest pipeline]
+        Q[arq queue<br/>Redis]
+        JOB[process_ingest_job<br/>extract -> chunk -> embed -> graph]
+        REORG[Auto-reorg<br/>communities + delta summaries]
+    end
+
+    subgraph GW[app/gateway — generation]
+        GM[LLM gateway<br/>groq / gemini / ollama / mock<br/>per-task overrides]
+    end
+
+    subgraph JEV[app/judgment — decisions]
+        JC[JudgmentClient<br/>typesafe / llm / mock / off<br/>Choice / Noul / Score]
+    end
+
+    subgraph Store[Persistence]
+        PG[(Postgres + pgvector<br/>documents, chunks,<br/>conversations, cache)]
+        N4[(Neo4j + GDS<br/>entities, relations,<br/>communities)]
+        RD[(Redis<br/>arq queue)]
+    end
+
+    SPA --> SEC --> AUTH --> R
+    R --> RT
+    RT --> CACHE_CHECK
+    CACHE_CHECK --> RW
+    RW --> HY --> GB --> RR --> PA --> CTX --> AG --> GEN --> CON
+    CON --> SSE --> SPA
+    R --> Q --> JOB
+    JOB --> PG
+    JOB --> N4
+    JOB --> REORG --> N4
+    HY --> PG
+    GB --> N4
+    AG --> GM
+    GEN --> GM
+    RW --> JC
+    CON --> JC
+    REORG --> GM
 ```
 
 ### Ingest pipeline (`app/workers/ingest.py` — arq job)
 
-1. **Upload** — `POST /ingest` creates document + job rows; the worker polls Redis
-   (`uv run arq app.workers.settings.WorkerSettings`) and runs `process_ingest_job`.
-2. **Extraction** — per file: PDFs via PyMuPDF, plain text, or **OCR fallback**
+```mermaid
+sequenceDiagram
+    participant UI as SPA
+    participant API as POST /api/v1/ingest
+    participant PG as Postgres
+    participant Q as Redis / arq
+    participant W as Worker
+    participant N4 as Neo4j
+
+    UI->>API: multipart files + corpus (vault name)
+    API->>PG: ensure vault + Document rows<br/>(content_hash dedup, idempotent)
+    API->>PG: IngestJob row (queued)
+    API->>Q: enqueue_ingest_job(job_id)
+    API-->>UI: 202 job_id
+    Q->>W: process_ingest_job
+    W->>W: extract (PDF / EPUB / MD / TXT / image)
+    W->>W: chunk parent-child + embed (bge-m3 / CLIP)
+    W->>PG: chunks / parent_chunks / images
+    W->>N4: entities + relations (tiered t1/t2/t3)
+    W->>N4: auto-reorg (communities, delta summaries)
+    W->>PG: job done + bump_corpus_version
+    UI->>API: GET /api/v1/ingest/job_id (poll progress)
+```
+
+1. **Upload** — `POST /api/v1/ingest` creates the vault (if missing), document rows, and a job row; the worker polls Redis
+   (`uv run arq app.workers.settings.WorkerSettings`) and runs `process_ingest_job`. 50 MB per-file cap; unsupported extensions are rejected with 400.
+2. **Extraction** — per file: PDFs via PyMuPDF, EPUB via ebooklib, plain text/Markdown, images via CLIP + vision captions; **OCR fallback**
    (tesseract, `METIS_OCR_ENGINE=pytesseract`) when a PDF yields no text. Files that
    still come out empty get `extraction_status=empty` + a UI badge — never silent.
    Knowledge-graph extraction is **tiered** (runtime-settable, default `t1`):
@@ -80,9 +154,27 @@ flowchart LR
    changed (`members_hash` invalidation) — LLM spend is delta-only. Debounce policy,
    min-docs threshold, and auto-toggle are runtime settings; every run lands in the
    `reorg_runs` audit log (`/library/reorganizations`).
-6. **Progress** — per-file status pollable at `/ingest/{job_id}` (job row in Postgres, polled by the UI).
+6. **Progress** — per-file status pollable at `GET /api/v1/ingest/{job_id}` (job row in Postgres, polled by the UI).
 
 ### Ask pipeline (`app/rag/pipeline.py` + friends)
+
+```mermaid
+flowchart LR
+    U[User question] --> R[Semantic router<br/>fast / standard / deep]
+    R -->|fast| CHAT[Greet / chit-chat<br/>no retrieval]
+    R -->|standard / deep| CACHE[(Semantic cache<br/>Postgres, cosine >= 0.92<br/>+ near-duplicate guard)]
+    CACHE -->|hit| GEN2[Replay cached answer<br/>cached: true]
+    CACHE -->|miss|    RW[Query rewrite +<br/>filter selection<br/>Jev Choice or LLM]
+    RW --> HY[Hybrid retrieval<br/>pgvector + FTS, RRF fusion]
+    HY --> GB[Graph boost<br/>entity neighbor chunks]
+    GB --> RR[Cross-encoder rerank<br/>bge-reranker-base]
+    RR --> PA[Parent expansion<br/>small-to-big context]
+    PA --> CTX[assemble_context<br/>numbered sources]
+    CTX --> GEN[Generation / ReAct agent]
+    GEN -->    CC[Contradiction scan<br/>embedding band 0.70-0.95<br/>Jev Noul or LLM judge]
+    CC --> SSE[SSE stream<br/>sources, thinking, tokens, citations, done]
+    SSE --> CACHE2[(cache_store)]
+```
 
 1. **Route** (`app/rag/router.py`) — synchronous heuristic lanes: greetings/trivia →
    `fast` (no retrieval), comparisons/multi-source → `deep`, else `standard`; optional
@@ -100,8 +192,8 @@ flowchart LR
    rerank (`bge-reranker-base`, top 5); **parent expansion** resolves children → parents.
 4. **Context assembly** (`app/rag/context.py`) — numbered sources; the model must cite `[n]`.
 5. **Generation** — ReAct agent (`app/rag/agent.py`) when the provider supports tool
-   calling (the model itself calls `search_vault` / `graph_lookup` / `wikipedia`);
-   otherwise the direct path. Any failure degrades to direct retrieval → context →
+   calling (the model itself calls `search_vault` / `graph_lookup`); otherwise the
+   direct path. Any failure degrades to direct retrieval → context →
    generation — never an empty reply.
 6. **Contradiction scan** (`app/rag/pipeline.py` + `contradiction.py`) — chunk
    embeddings are compared pairwise; only pairs in the suspicious band
@@ -112,6 +204,40 @@ flowchart LR
    sources persisted per conversation.
 8. **Feedback** (P6) — thumbs-down re-embeds the question and **evicts semantically
    matching cache entries**, so the same/similar question must be answered fresh.
+
+### Auth & data ownership (`METIS_AUTH_MODE`)
+
+```mermaid
+flowchart TB
+    subgraph Modes
+        USERS[users — default<br/>JWT accounts, scrypt passwords<br/>per-user vault ownership]
+        TOKEN[token — legacy<br/>shared secret gate<br/>METIS_API_TOKEN]
+        NONE[none — localhost dev<br/>no gate, tests force this]
+    end
+
+    subgraph Data
+        U[(users)]
+        V[(vaults<br/>owner_id)]
+        D[(documents<br/>corpus = vault name)]
+        C[(conversations<br/>vault_name)]
+    end
+
+    USERS --> U
+    U -->|owns| V
+    V -->|holds| D
+    V -->|holds| C
+    TOKEN --> V
+    NONE --> V
+```
+
+- `users` (default): register via `POST /api/v1/auth/register`, sign in via `/auth/login`
+  (JWT in `Authorization: Bearer`). Every vault/document/conversation/search route scopes
+  through `owned_vault` / `vault_scope_guard` (`vaults.owner_id`, migration `0012`); the
+  first registered account adopts pre-accounts vaults (`owner_id IS NULL`).
+- `token`: the legacy shared-secret gate — `METIS_API_TOKEN` becomes active, accepted as
+  `Authorization: Bearer`, `X-API-Token`, or `?token=` (downloads only). `/healthz`,
+  `/auth/*`, and `/static/*` stay open.
+- `none`: open localhost dev (tests force this in conftest).
 
 ### LLM gateway (`app/gateway/`)
 
@@ -156,20 +282,36 @@ matrix kept skipping on fresh CI databases); it enforces thresholds only when
 Postgres is reachable **and** the dataset's corpus is ingested, and exits 1 on any
 breach. See Measured results below.
 
+```mermaid
+flowchart LR
+    GQ[(golden_questions<br/>seeded per dataset)] --> RUN[run_eval<br/>answer each non-streaming<br/>per-config overrides]
+    RUN --> MJ[Metric judges<br/>faithfulness / relevancy<br/>precision / recall / citations<br/>batched: one request each]
+    MJ --> REP[(eval_runs<br/>persisted)]
+    REP --> MAT[run_matrix<br/>default row gated]
+```
+
 ### Repository layout
 
 ```text
 app/
-  api/routes/     one router per endpoint group (/api/v1)
+  api/routes/     one router per endpoint group (mounted under /api/v1 in main.py)
+  core/           settings (METIS_*), auth (JWT/scrypt), security (token gate/headers),
+                  rate limits, logging, errors
+  db/             SQLAlchemy async models (users, vaults, documents, chunks,
+                  conversations, cache, evals) + session
   gateway/        provider clients + task routing (groq/gemini/ollama/mock)
   judgment/       TypeSafe Jev judgment layer: primitives, adapter, mock, policy
   rag/            router, retrieval, rerank, context, agent, contradiction, vision
   graph/          Neo4j store, extraction, communities (GDS)
   evals/          golden datasets, metrics, runner
-  workers/        arq jobs (ingest, auto-reorg) + runtime settings store
+  workers/        arq jobs (ingest, auto-reorg) + enqueue + runtime settings store
+  schemas/        request/response models
   static/         dependency-free vanilla-JS SPA (served at /)
+                  js/views: home, auth, ask, documents, graphview,
+                            library, contradictions, settings + shell
 scripts/          run_matrix, frontend_qa
 tests/            pytest suite — mock models/LLMs, DB-gated fixtures
+alembic/          async migrations (0012 = vault ownership)
 ```
 
 ## Quickstart
@@ -190,6 +332,11 @@ uv run uvicorn app.main:app --reload
 uv run arq app.workers.settings.WorkerSettings
 ```
 
+Then open `http://127.0.0.1:8000`, **register the first account** (it adopts any
+pre-accounts vaults), create a vault, and upload a file. In `token` mode set
+`METIS_API_TOKEN` and paste it into the SPA prompt instead; in `none` mode just open
+the app.
+
 No API keys? Everything runs on the built-in mock provider; a local ollama model can be
 substituted per task via `METIS_JUDGE_PROVIDER` / `METIS_EXTRACTION_PROVIDER` /
 `METIS_PRIMARY_PROVIDER` (see `.env.example` and `docs/deployment.md`).
@@ -201,22 +348,18 @@ export TYPESAFE_API_KEY="ts-..."      # https://console.typesafe.ai (unprefixed 
 export METIS_JUDGMENT_BACKEND=typesafe
 ```
 
-Optional — protect a public instance with a shared token:
-
-```bash
-export METIS_API_TOKEN="$(python -c 'import secrets;print(secrets.token_urlsafe(32))')"
-```
-
 ## Frontend
 
 A hand-built, dependency-free single-page app served by FastAPI at `/` (no build step —
 vanilla ES modules + CSS custom properties).
 
-- **Vaults** — named libraries (`/vaults` API). Each vault holds its documents, its own
+- **Auth** — register / sign in / sign out; JWT stored in `localStorage`; the app probes
+  `/auth/me` on boot and redirects to the login view when accounts are enabled.
+- **Vaults** — named libraries (`/vaults` API), per-user owned. Each vault holds its documents, its own
   knowledge graph, and a chat grounded in that vault's sources. Ingest reports per-file
   status, including OCR (`ocr`) and empty-document (`empty`) badges instead of silent gaps.
 - **Documents** — library grid with per-file status, drag-and-drop upload with live job
-  progress, and a detail view (raw content, chunk list, original file).
+  progress, and a detail view (raw content, chunk list, original file download).
 - **Graph** — a bespoke canvas force-directed renderer: drag nodes, scroll to zoom,
   click an entity to expand its neighborhood, search to focus. No graph library — the
   physics and rendering are ~300 lines of first-party code. Communities (P5): GDS
@@ -226,11 +369,20 @@ vanilla ES modules + CSS custom properties).
   badge. A semantic router picks a fast/standard/deep lane per question (label shown in
   the UI); parent-child chunking keeps retrieval precise while the model reads full
   parent passages. **Thumbs up/down** on any answer: thumbs-down evicts the matching
-  cache entries so a bad answer is never replayed.
+  cache entries so a bad answer is never replayed. A **document picker** scopes any
+  answer to a selection of documents.
+- **Contradictions** — dedicated view + one-click **vault-wide contradiction report**
+  (`POST /vaults/{name}/contradiction-report`) with probability bars and both quotes
+  side by side.
+- **Notes & export** — save any answer as a note (`POST /vaults/{name}/notes`; it becomes
+  a first-class, citable document) and download an Obsidian-friendly zip
+  (`GET /vaults/{name}/export`: frontmattered markdown per document + graph files).
+- **Connectors** — import a web article by URL or pull in **Readwise** / **Zotero**
+  libraries (`POST /imports/url|readwise|zotero`; credentials are per-request, never stored).
 - **ReAct agent** — when the LLM provider supports function calling, the chat runs a
-  tool-augmented reasoning loop: the model itself searches the vault, expands the
-  knowledge graph, and checks background references before answering. The frontend
-  shows a live "thinking" panel with each tool step as it happens.
+  tool-augmented reasoning loop: the model itself searches the vault and expands the
+  knowledge graph before answering. The frontend shows a live "thinking" panel with each
+  tool step as it happens.
 - **Conversations** — every exchange is persisted server-side per vault (migration
   0005). Follow-ups carry full history back into the agent loop; the Ask view lists,
   switches, renames, and deletes past conversations.
@@ -254,53 +406,85 @@ vanilla ES modules + CSS custom properties).
   are self-hosted.
 
 Run the end-to-end UI check (headless Chromium, verifies home/vaults/graph/ask/themes
-and fails on any console error):
+and fails on any console error). It auto-registers `qa@metis.local`:
 
 ```bash
+# default target is :8011 — start the app there first
+uv run uvicorn app.main:app --port 8011
 uv run python scripts/frontend_qa.py
 ```
 
-## API surface (`/api/v1`)
+## API surface
 
-With `METIS_API_TOKEN` set, every endpoint below requires it (`Authorization: Bearer`,
-`X-API-Token`, or `?token=`) except `/healthz`.
+Auth mode changes what the gate enforces (see Security). In `users` mode every
+vault/document/conversation/search route requires a JWT and is scoped to the caller;
+in `token` mode the same routes require `METIS_API_TOKEN` (`Authorization: Bearer`,
+`X-API-Token`, or `?token=`); `/healthz`, `/auth/*`, and `/static/*` stay open.
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `/healthz` | GET | Liveness + readiness |
-| `/ingest` | POST (multipart) | Upload files + corpus → `job_id` |
-| `/ingest/{job_id}` | GET | Job progress (+ SSE `/ingest/{job_id}/stream`) |
-| `/corpora` | GET | Corpora + doc counts + graph stats |
-| `/ask` | POST | Ask with SSE stream (`sources → thinking → tokens → citations → done`) |
-| `/vaults/{name}/conversations` | GET/POST | List / create conversations for a vault |
-| `/conversations/{id}` | GET/PATCH/DELETE | Conversation detail, rename, delete |
-| `/conversations/{id}/messages` | GET | Message history for a conversation |
-| `/ask/{message_id}/feedback` | POST | Rate an answer (`-1`/`1`); `-1` evicts matching semantic-cache entries |
-| `/evals/feedback` | GET | Feedback log (ratings joined with conversations) |
-| `/vaults/{name}/graph` | GET | Vault graph stats + communities (GDS) |
-| `/search` | GET | Raw hybrid search |
-| `/graph/explore` | GET | Subgraph around an entity |
-| `/graph/connections` | GET | Path between two entities |
-| `/graph/stats` | GET | Node/edge counts, top entities by PageRank |
-| `/cache/stats` | GET | Semantic cache hit rate |
-| `/library/graph` | GET | Cross-vault library graph (corpus-tagged nodes, bridge flags) |
-| `/library/surprises` | GET | Mined cross-vault connections with LLM narratives |
-| `/library/journey` | GET | Shortest entity path across vaults + narrated story |
-| `/library/entities` | GET | Entity search for the journey pickers |
-| `/settings` | GET/PUT | Runtime settings (`app_settings` overrides, env defaults) |
-| `/library/reorganizations` | GET | Auto-reorg audit log (every run, manual or automatic) |
-| `/graph/communities` | POST | Manual community detection + summary refresh (logged) |
-| `/evals/run` | POST | Run the eval harness |
-| `/evals/reports` | GET | Past eval runs + metrics |
+| `/healthz` | GET | Liveness + readiness (no prefix, always open) |
+| `/api/v1/auth/register` | POST | Register account (users mode; first account adopts orphan vaults) |
+| `/api/v1/auth/login` | POST | Sign in, returns JWT |
+| `/api/v1/auth/me` | GET | Current account |
+| `/api/v1/ingest` | POST (multipart) | Upload files + corpus (vault name) → `job_id` |
+| `/api/v1/ingest/{job_id}` | GET | Job progress |
+| `/api/v1/corpora` | GET | Corpora + doc counts + graph stats |
+| `/api/v1/ask` | POST | Ask with SSE stream (`sources → thinking → tokens → citations → done`) |
+| `/api/v1/vaults` | GET/POST | List / create vaults (owned) |
+| `/api/v1/vaults/{name}` | GET/PATCH/DELETE | Vault detail, rename/color, delete (+ graph cleanup) |
+| `/api/v1/vaults/{name}/documents` | GET | Documents in a vault with chunk/image counts + status |
+| `/api/v1/vaults/{name}/graph` | GET | Vault graph stats + communities (GDS) |
+| `/api/v1/vaults/{name}/suggestions` | GET | Starter questions mined from top entities |
+| `/api/v1/vaults/{name}/export` | GET | Obsidian zip (frontmattered markdown + graph files) |
+| `/api/v1/vaults/{name}/notes` | POST | Save an answer as a note (becomes a citable document) |
+| `/api/v1/vaults/{name}/contradiction-report` | POST | Vault-wide contradiction scan with probabilities |
+| `/api/v1/documents/recent` | GET | Recently ingested documents (owned scope) |
+| `/api/v1/documents/{doc_id}` | GET/DELETE | Document detail / delete (+ graph cleanup) |
+| `/api/v1/documents/{doc_id}/content` | GET | Raw extracted text |
+| `/api/v1/documents/{doc_id}/chunks` | GET | Chunk list |
+| `/api/v1/documents/{doc_id}/file` | GET | Original file download |
+| `/api/v1/documents/{doc_id}/metadata` | PATCH | Edit tags/date/author |
+| `/api/v1/vaults/{name}/conversations` | GET/POST | List / create conversations for a vault |
+| `/api/v1/conversations/{id}` | GET/PATCH/DELETE | Conversation detail, rename, delete |
+| `/api/v1/conversations/{id}/messages` | GET | Message history for a conversation |
+| `/api/v1/ask/{message_id}/feedback` | POST | Rate an answer (`-1`/`1`); `-1` evicts matching semantic-cache entries |
+| `/api/v1/evals/feedback` | GET | Feedback log (ratings joined with conversations) |
+| `/api/v1/search` | GET | Raw hybrid search |
+| `/api/v1/graph/explore` | GET | Subgraph around an entity |
+| `/api/v1/graph/connections` | GET | Path between two entities |
+| `/api/v1/graph/stats` | GET | Node/edge counts, top entities by PageRank |
+| `/api/v1/graph/communities` | POST | Manual community detection + summary refresh (logged) |
+| `/api/v1/cache/stats` | GET | Semantic cache hit rate |
+| `/api/v1/library/graph` | GET | Cross-vault library graph (corpus-tagged nodes, bridge flags) |
+| `/api/v1/library/entities` | GET | Entity search for the journey pickers |
+| `/api/v1/library/surprises` | GET | Mined cross-vault connections with LLM narratives |
+| `/api/v1/library/journey` | GET | Shortest entity path across vaults + narrated story |
+| `/api/v1/library/reorganizations` | GET | Auto-reorg audit log (every run, manual or automatic) |
+| `/api/v1/imports/url` | POST | Ingest a web article by URL |
+| `/api/v1/imports/readwise` | POST | Ingest Readwise highlights (per-request token) |
+| `/api/v1/imports/zotero` | POST | Ingest a Zotero library (per-request key) |
+| `/api/v1/settings` | GET/PUT | Runtime settings (`app_settings` overrides, env defaults) |
+| `/api/v1/evals/run` | POST | Run the eval harness |
+| `/api/v1/evals/reports` | GET | Past eval runs + metrics |
 
 ## Security
 
-There are no accounts and no sessions — Metis is a single-operator tool.
+Metis has three auth modes (`METIS_AUTH_MODE`, `app/core/auth.py` + `app/core/security.py`):
 
-- **Access control:** set `METIS_API_TOKEN` and every protected route requires it
-  (empty is the default and keeps local use unauthenticated). Constant-time comparison;
-  `/healthz` and `/static/*` stay open so monitoring and the prompt keep working.
-  The SPA prompts once and stores the token.
+- **`users` (default)** — real accounts: scrypt password hashes, per-user JWTs
+  (`METIS_SECRET_KEY` signs them — change it in any shared deployment), per-user vault
+  ownership via `vaults.owner_id` (migration `0012`; the first registered account adopts
+  pre-accounts vaults). Every vault/document/conversation/search route takes a user and
+  scopes through `owned_vault` / `vault_scope_guard`.
+- **`token` (legacy shared-secret gate)** — set `METIS_API_TOKEN` and every protected
+  route requires it (empty keeps local use open). Constant-time comparison;
+  `/healthz`, `/auth/*`, and `/static/*` stay open so monitoring and the prompt keep
+  working. The SPA prompts once and stores the token.
+- **`none`** — open localhost dev (tests force this in conftest).
+
+Plus, in every mode:
+
 - **Headers:** `nosniff`, frame-deny, referrer-policy, permissions-policy, and a CSP that
   keeps `script-src 'self'`; HSTS when `METIS_ENV=prod`.
 - **Rate limiting:** per-client with `Retry-After`; `METIS_TRUST_PROXY_HEADERS` makes it
